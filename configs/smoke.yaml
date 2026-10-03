@@ -1,0 +1,26 @@
+model:
+  _target_: patchwam.models.make_tiny_policy
+  action_dim: 14
+  proprio_dim: 14
+  text_dim: 32
+data:
+  _target_: patchwam.testing.TensorExamples
+  length: 16
+  action_dim: 14
+  proprio_dim: 14
+  text_dim: 32
+  horizon: 16
+training:
+  output_dir: runs/smoke
+  epochs: 1
+  max_updates: 2
+  batch_size: 2
+  accumulation: 1
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  precision: "no"
+  cpu: true
+  workers: 0
+  checkpoint_every: 2
+  log_every: 1
+  seed: 42

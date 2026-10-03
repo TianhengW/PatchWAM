@@ -1,0 +1,10 @@
+PatchWAM
+Copyright 2026 PatchWAM contributors.
+
+New PatchWAM implementations are licensed under Apache License 2.0.
+The adapted data processing code in src/patchwam/data builds on ImageWAM
+(https://github.com/yuyangalin/ImageWAM).
+Copyright (c) 2026 Yuyang "Alice.L". Its MIT license is retained in
+licenses/ImageWAM-MIT.txt and accompanies the adapted files.
+See src/patchwam/data/PROVENANCE.json for the source and modification inventory.
+External model weights and benchmark assets have their own licenses.

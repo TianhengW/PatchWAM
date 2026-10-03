@@ -1,0 +1,152 @@
+# Port of locked C2R-DR4 recipe; real checkpoint/GPU/closed-loop parity unverified.
+model:
+  _target_: patchwam.models.FluxAssetPolicy.from_local_assets
+  transformer_path: ${oc.env:PATCHWAM_TRANSFORMER}
+  autoencoder_path: ${oc.env:PATCHWAM_AUTOENCODER}
+  text_encoder_path: ${oc.env:PATCHWAM_TEXT_ENCODER}
+  flux_source: ${oc.env:FLUX2_SRC}
+  action_dim: ${data.processor.action_output_dim}
+  proprio_dim: ${data.processor.proprio_output_dim}
+  variant: klein-base-4b
+  dtype: bfloat16
+  device: cuda
+  context_length: 128
+  shift: 5.0
+  video_weight: 0.5
+  action_weight: 1.0
+  action_scale: 1.0
+  gradient_checkpointing: true
+data:
+  _target_: patchwam.data.EpisodeDataset
+  dataset_dirs:
+  - ${oc.env:PATCHWAM_DATA_ROOT}
+  num_frames: 17
+  endpoint_frames_only: true
+  action_video_freq_ratio: 1
+  global_sample_stride: 1
+  sample_index_stride: 1
+  video_size:
+  - 288
+  - 256
+  concat_multi_camera: robotwin
+  robotwin_camera_layout: compact_288x256
+  val_set_proportion: 0.01
+  is_training_set: true
+  pretrained_norm_stats: ${oc.env:PATCHWAM_NORM_STATS}
+  nonidle_filter_path: ${oc.env:PATCHWAM_NONIDLE_FILTER}
+  shape_meta:
+    images:
+    - key: cam_high
+      raw_shape:
+      - 3
+      - 480
+      - 640
+      shape:
+      - 3
+      - 240
+      - 320
+    - key: cam_left_wrist
+      raw_shape:
+      - 3
+      - 480
+      - 640
+      shape:
+      - 3
+      - 240
+      - 320
+    - key: cam_right_wrist
+      raw_shape:
+      - 3
+      - 480
+      - 640
+      shape:
+      - 3
+      - 240
+      - 320
+    action:
+    - key: default
+      raw_shape: 14
+      shape: 14
+    state:
+    - key: default
+      raw_shape: 14
+      shape: 14
+  processor:
+    _target_: patchwam.data.SampleProcessor
+    shape_meta: ${data.shape_meta}
+    action_output_dim: 14
+    proprio_output_dim: 14
+    norm_default_mode: z-score
+    use_stepwise_action_norm: false
+  video_augmentation:
+    _target_: patchwam.data.AppearanceRandomizer
+    p: 0.8
+    photometric:
+      brightness: 0.4
+      contrast: 0.4
+      saturation: 0.4
+      hue: 0.1
+      gamma:
+      - 0.7
+      - 1.4
+      exposure:
+      - -0.5
+      - 0.5
+      color_temperature: 0.15
+      gaussian_noise_std: 0.03
+      blur_sigma:
+      - 0.0
+      - 1.5
+      blur_prob: 0.3
+    style:
+      enabled: true
+      p: 0.5
+      target_mean:
+      - 0.2
+      - 0.8
+      target_std:
+      - 0.05
+      - 0.4
+      strength:
+      - 0.4
+      - 1.0
+    fourier:
+      enabled: true
+      p: 0.5
+      amp_jitter:
+      - 0.5
+      - 1.5
+      envelope_strength:
+      - 0.0
+      - 0.6
+      envelope_grid: 8
+    background:
+      enabled: false
+  episode_index_filter:
+    mode: periodic_prefix
+    period: 550
+    keep_first: 50
+training:
+  output_dir: runs/robotwin_c2r
+  epochs: 100
+  max_updates: 150000
+  batch_size: 16
+  accumulation: 1
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  precision: bf16
+  workers: 16
+  gradient_clip: 1.0
+  checkpoint_every: 5000
+  log_every: 10
+  seed: 42
+  betas:
+  - 0.9
+  - 0.95
+  warmup_fraction: 0.05
+  minimum_lr_fraction: 0.01
+  global_batch_size: 256
+inference:
+  steps: 10
+  replan_horizon: 16
+  data_fps: 50
