@@ -357,7 +357,7 @@ def test_official_style_numpy_initial_state_loading_is_scoped(tabletop_api, tmp_
     states = np.array([[11, 12, 13], [21, 22, 23]], dtype=dtype)
     torch.save(states, path)
     original_load = torch.load
-    original_globals = torch.serialization.get_safe_globals()
+    original_globals = set(torch.serialization.get_safe_globals())
     with pytest.raises(pickle.UnpicklingError, match="Weights only load failed"):
         torch.load(path)
     suite = sys.modules["libero.libero.benchmark"].get_benchmark_dict()["libero_spatial"]
@@ -373,7 +373,7 @@ def test_official_style_numpy_initial_state_loading_is_scoped(tabletop_api, tmp_
     np.testing.assert_array_equal(runtime.initial_states[0], states[1])
     assert runtime.initial_states[0].dtype == dtype
     assert torch.load is original_load
-    assert torch.serialization.get_safe_globals() == original_globals
+    assert set(torch.serialization.get_safe_globals()) == original_globals
     with pytest.raises(pickle.UnpicklingError, match="Weights only load failed"):
         torch.load(path)
     env.close()
@@ -387,10 +387,10 @@ def test_initial_state_loader_rejects_unknown_objects(tabletop_api, tmp_path, mo
     torch.save(_UnexpectedStateObject(), path)
     suite = sys.modules["libero.libero.benchmark"].get_benchmark_dict()["libero_spatial"]
     monkeypatch.setattr(suite, "get_task_init_states", lambda self, task_id: torch.load(path))
-    original_globals = torch.serialization.get_safe_globals()
+    original_globals = set(torch.serialization.get_safe_globals())
     with pytest.raises(pickle.UnpicklingError, match="_UnexpectedStateObject"):
         make_environment(_tabletop_spec(), _tabletop_meta(), seed=0, episode_index=0)
-    assert torch.serialization.get_safe_globals() == original_globals
+    assert set(torch.serialization.get_safe_globals()) == original_globals
     assert not tabletop_api.instances
 
 
