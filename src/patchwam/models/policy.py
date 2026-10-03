@@ -2,6 +2,7 @@
 """Joint latent flow objective and action-chunk sampling."""
 
 from collections.abc import Mapping
+from itertools import pairwise
 from typing import Any
 
 import torch
@@ -50,6 +51,10 @@ class PatchFlowPolicy(nn.Module):
         valid = batch.get("text_valid")
         if valid is not None and valid.shape != context.shape[:2]:
             raise ValueError("text_valid shape must match text_tokens")
+        if valid is not None:
+            valid = valid.to(device=context.device, dtype=torch.bool)
+            # A masked key containing NaN still contaminates SDPA's dot product.
+            context = torch.where(valid[..., None], context, 0)
         if self.state_projection is not None:
             state = batch.get("proprio")
             if state is None:
@@ -70,6 +75,7 @@ class PatchFlowPolicy(nn.Module):
         if dimensions is None:
             valid_dimensions = torch.ones_like(actions, dtype=torch.bool)
         else:
+            dimensions = dimensions.to(device=actions.device, dtype=torch.bool)
             if dimensions.ndim == 2:
                 dimensions = dimensions[:, None, :]
             try:
@@ -82,7 +88,7 @@ class PatchFlowPolicy(nn.Module):
         else:
             if steps.shape != actions.shape[:2]:
                 raise ValueError("action_is_pad must be [B,H]")
-            valid_steps = ~steps.bool()
+            valid_steps = ~steps.to(device=actions.device, dtype=torch.bool)
         return valid_dimensions & valid_steps[..., None], valid_steps
 
     def _velocity(self, batch: Mapping[str, Any], noisy_future: Tensor, noisy_action: Tensor, sigma: Tensor) -> tuple[Tensor, Tensor]:
@@ -132,6 +138,7 @@ class PatchFlowPolicy(nn.Module):
             sigma = self.flow.sample(future.shape[0], device=future.device, generator=generator)
         if sigma.shape != (future.shape[0],) or not torch.isfinite(sigma).all() or ((sigma < 0) | (sigma > 1)).any():
             raise ValueError("sigma must be finite [B] values in [0,1]")
+        sigma = sigma.to(device=future.device, dtype=torch.float32)
         if future_noise is None:
             future_noise = torch.randn(future.shape, device=future.device, dtype=future.dtype, generator=generator)
         if action_noise is None:
@@ -139,7 +146,7 @@ class PatchFlowPolicy(nn.Module):
         x, velocity_x = self.flow.perturb(future, future_noise, sigma)
         u, velocity_u = self.flow.perturb(action_tokens, action_noise, sigma)
         prediction_x, prediction_u = self._velocity(batch, x, u, sigma)
-        valid_token_coordinates = self.codec.coordinate_validity(valid_dimensions) & valid_steps[..., None]
+        valid_token_coordinates = (self.codec.coordinate_validity(valid_dimensions) & valid_steps[..., None]).to(future.device)
         per_video = masked_sample_mse(prediction_x, velocity_x)
         per_action = masked_sample_mse(prediction_u, velocity_u, valid_token_coordinates)
         weight = self.flow.weight(sigma)
@@ -175,7 +182,7 @@ class PatchFlowPolicy(nn.Module):
         if x.shape != (b, future_length, width) or u.shape != (b, horizon, width):
             raise ValueError("Initial latent shapes differ from the requested output")
         schedule = self.flow.schedule(steps, device=reference.device)
-        for start, end in zip(schedule[:-1], schedule[1:]):
+        for start, end in pairwise(schedule):
             vx, vu = self._velocity(batch, x, u, start.expand(b))
             x, u = x + (end - start) * vx, u + (end - start) * vu
         return {"action": self.codec.decode(u), "future_tokens": x}
@@ -183,9 +190,9 @@ class PatchFlowPolicy(nn.Module):
 
 def make_tiny_policy(
     *, action_dim: int = 14, proprio_dim: int | None = 14, text_dim: int = 32,
-    width: int = 64, heads: int = 4, depth: int = 2, **policy_options,
+    token_dim: int = 128, width: int = 64, heads: int = 4, depth: int = 2, **policy_options,
 ) -> PatchFlowPolicy:
-    denoiser = SmallJointTransformer(text_dim=text_dim, width=width, heads=heads, depth=depth)
+    denoiser = SmallJointTransformer(token_dim=token_dim, text_dim=text_dim, width=width, heads=heads, depth=depth)
     return PatchFlowPolicy(
-        denoiser, action_dim=action_dim, text_dim=text_dim, proprio_dim=proprio_dim, **policy_options,
+        denoiser, action_dim=action_dim, token_dim=token_dim, text_dim=text_dim, proprio_dim=proprio_dim, **policy_options,
     )

@@ -3,12 +3,18 @@
 
 from .codec import RepeatedActionCodec
 from .flow import ShiftedFlow
+from .flux import FluxAssetPolicy, OfficialFluxDenoiser
 from .geometry import joint_visibility, raster_coordinates, sequence_coordinates
 from .policy import PatchFlowPolicy, make_tiny_policy
-from .flux import FluxAssetPolicy, OfficialFluxDenoiser
 
 __all__ = [
-    "RepeatedActionCodec", "ShiftedFlow", "joint_visibility", "raster_coordinates",
-    "sequence_coordinates", "PatchFlowPolicy", "make_tiny_policy", "FluxAssetPolicy",
+    "FluxAssetPolicy",
     "OfficialFluxDenoiser",
+    "PatchFlowPolicy",
+    "RepeatedActionCodec",
+    "ShiftedFlow",
+    "joint_visibility",
+    "make_tiny_policy",
+    "raster_coordinates",
+    "sequence_coordinates",
 ]

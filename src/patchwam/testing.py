@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Small deterministic tensor examples for local verification without model downloads."""
 
-import torch
 import hashlib
 import json
+
+import torch
 from torch.utils.data import Dataset
 
 

@@ -12,10 +12,11 @@ commit 50fe5162777813d869182b139e83b10743caef15. Checkpoint load is strict;
 Policy initialization uses the native safetensors parameter names.
 """
 
+import hashlib
 import importlib
-from pathlib import Path
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -25,6 +26,31 @@ from torch.utils.checkpoint import checkpoint
 
 from .geometry import flatten_image_latents, raster_coordinates
 from .policy import PatchFlowPolicy
+
+
+def _asset_file_identity(path: Path) -> dict[str, Any]:
+    path = path.resolve()
+    stat = path.stat()
+    identity = {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    # Large weight files are already read during initialization; use their file
+    # metadata rather than performing another full multi-gigabyte read.
+    if stat.st_size <= 8 * 1024 * 1024 and path.suffix not in {".safetensors", ".bin", ".pt"}:
+        identity["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return identity
+
+
+def _asset_identity(transformer_path, autoencoder_path, text_encoder_path, modules) -> dict[str, Any]:
+    text_root = Path(text_encoder_path)
+    text_files = sorted(path for path in text_root.rglob("*") if path.is_file() and
+                        not any(part.startswith(".") for part in path.relative_to(text_root).parts))
+    if not text_files:
+        raise ValueError("The local text encoder directory contains no model assets")
+    return {
+        "transformer": _asset_file_identity(Path(transformer_path)),
+        "autoencoder": _asset_file_identity(Path(autoencoder_path)),
+        "text_encoder": [_asset_file_identity(path) for path in text_files],
+        "source": [_asset_file_identity(Path(module.__file__)) for module in modules],
+    }
 
 
 class OfficialFluxDenoiser(nn.Module):
@@ -143,27 +169,46 @@ class FluxAssetPolicy(nn.Module):
 
     @torch.no_grad()
     def _encode(self, batch: Mapping[str, Any], *, target: bool) -> dict[str, Any]:
-        if "reference_tokens" in batch:
-            return dict(batch)
-        video = batch["video"]
-        if video.ndim == 4:
-            video = video.unsqueeze(2)
-        if video.ndim != 5 or video.shape[1] != 3 or video.shape[2] < (2 if target else 1):
-            raise ValueError("video must be [B,3,T,H,W], with T>=2 for training")
-        encoder_parameter = next(self.autoencoder.parameters())
-        current = self.autoencoder.encode(video[:, :, 0].to(encoder_parameter))
-        b, channels, height, width = current.shape
-        if channels != self.policy.codec.token_dim:
-            raise ValueError("Official AE must produce already packed 128-channel latents")
+        cache_formats = batch.get("text_cache_format")
+        if cache_formats is not None:
+            cache_formats = [cache_formats] if isinstance(cache_formats, str) else cache_formats
+            if any(value != "qwen3_flux2" for value in cache_formats) or "text_tokens" not in batch:
+                raise ValueError("This policy requires a native Qwen3 FLUX.2 text cache")
         result = dict(batch)
-        result["reference_tokens"] = flatten_image_latents(current)
-        result["reference_ids"] = raster_coordinates(b, height, width, group=10, device=current.device)
-        result["future_ids"] = raster_coordinates(b, height, width, group=0, device=current.device)
-        if target:
-            future = self.autoencoder.encode(video[:, :, -1].to(encoder_parameter))
-            if future.shape != current.shape:
-                raise ValueError("Current and future raster shapes differ")
-            result["future_tokens"] = flatten_image_latents(future)
+        if "reference_tokens" in batch:
+            current = batch["reference_tokens"]
+            if current.ndim != 3:
+                raise ValueError("reference_tokens must be [B,R,token_dim]")
+            parameter = next(self.policy.parameters(), None)
+            current = current if parameter is None else current.to(parameter)
+            result["reference_tokens"] = current
+            b = current.shape[0]
+            if target and "future_tokens" not in batch:
+                raise ValueError("Cached training observations require future_tokens")
+            if "future_tokens" in batch:
+                result["future_tokens"] = batch["future_tokens"].to(current)
+            for name in ("reference_ids", "future_ids"):
+                if name in batch:
+                    result[name] = batch[name].to(device=current.device)
+        else:
+            video = batch["video"]
+            if video.ndim == 4:
+                video = video.unsqueeze(2)
+            if video.ndim != 5 or video.shape[1] != 3 or video.shape[2] < (2 if target else 1):
+                raise ValueError("video must be [B,3,T,H,W], with T>=2 for training")
+            encoder_parameter = next(self.autoencoder.parameters())
+            current = self.autoencoder.encode(video[:, :, 0].to(encoder_parameter))
+            b, channels, height, width = current.shape
+            if channels != self.policy.codec.token_dim:
+                raise ValueError("Official AE must produce already packed 128-channel latents")
+            result["reference_tokens"] = flatten_image_latents(current)
+            result["reference_ids"] = raster_coordinates(b, height, width, group=10, device=current.device)
+            result["future_ids"] = raster_coordinates(b, height, width, group=0, device=current.device)
+            if target:
+                future = self.autoencoder.encode(video[:, :, -1].to(encoder_parameter))
+                if future.shape != current.shape:
+                    raise ValueError("Current and future raster shapes differ")
+                result["future_tokens"] = flatten_image_latents(future)
         text = batch.get("text_tokens")
         if text is None:
             prompt = batch.get("prompt")
@@ -175,6 +220,10 @@ class FluxAssetPolicy(nn.Module):
             else:
                 text = encoded
         result["text_tokens"] = text.to(current)
+        if result["text_tokens"].ndim != 3 or result["text_tokens"].shape[0] != b or result["text_tokens"].shape[-1] != self.policy.text_dim:
+            raise ValueError(f"text_tokens must be [B,L,{self.policy.text_dim}]")
+        if "text_valid" in result:
+            result["text_valid"] = result["text_valid"].to(device=current.device, dtype=torch.bool)
         return result
 
     def forward(self, batch: Mapping[str, Any], **kwargs) -> dict[str, Tensor]:
@@ -208,6 +257,7 @@ class FluxAssetPolicy(nn.Module):
                 raise FileNotFoundError(path)
         if not Path(text_encoder_path).is_dir():
             raise FileNotFoundError("text_encoder_path must be a local Hugging Face model directory")
+        package_root = None
         if flux_source is not None:
             package_root = Path(flux_source).expanduser().resolve() / "src"
             if not (package_root / "flux2" / "model.py").is_file():
@@ -216,10 +266,18 @@ class FluxAssetPolicy(nn.Module):
         try:
             model_api = importlib.import_module("flux2.model")
             ae_api = importlib.import_module("flux2.autoencoder")
+            text_api = importlib.import_module("flux2.text_encoder")
         except ImportError as exc:
             raise ImportError("Install the official black-forest-labs/flux2 package or supply flux_source") from exc
+        if package_root is not None and any(
+            not Path(module.__file__).resolve().is_relative_to(package_root / "flux2")
+            for module in (model_api, ae_api, text_api)
+        ):
+            raise RuntimeError("Another FLUX.2 source is already imported; start a fresh process for flux_source")
         from safetensors.torch import load_file
 
+        asset_signature = _asset_identity(transformer_path, autoencoder_path, text_encoder_path,
+                                          (model_api, ae_api, text_api))
         precision = getattr(torch, dtype)
         config = model_api.Klein4BParams() if variant.endswith("4b") else model_api.Klein9BParams()
         with torch.device("meta"):
@@ -229,13 +287,20 @@ class FluxAssetPolicy(nn.Module):
         autoencoder.load_state_dict(load_file(autoencoder_path, device=device), strict=True, assign=True)
         transformer, autoencoder = transformer.to(device=device, dtype=precision), autoencoder.to(device=device, dtype=precision)
         text_encoder = LocalInstructionEncoder(text_encoder_path, context_length=context_length, dtype=precision).to(device)
+        if text_encoder.feature_dim != config.context_in_dim:
+            raise ValueError(f"The text encoder provides {text_encoder.feature_dim} features; {variant} requires {config.context_in_dim}")
         denoiser = OfficialFluxDenoiser(transformer, gradient_checkpointing=gradient_checkpointing)
         policy = PatchFlowPolicy(
             denoiser, action_dim=action_dim, text_dim=config.context_in_dim, proprio_dim=proprio_dim,
             action_scale=action_scale, shift=shift, video_weight=video_weight, action_weight=action_weight,
             isolate_actions=isolate_actions,
         ).to(device=device, dtype=precision)
-        return cls(policy, autoencoder, text_encoder)
+        if asset_signature != _asset_identity(transformer_path, autoencoder_path, text_encoder_path,
+                                              (model_api, ae_api, text_api)):
+            raise RuntimeError("Local model assets changed while they were being loaded")
+        result = cls(policy, autoencoder, text_encoder)
+        result.asset_signature = asset_signature
+        return result
 
 
 class LocalInstructionEncoder(nn.Module):
@@ -251,6 +316,9 @@ class LocalInstructionEncoder(nn.Module):
         )
         # Externally supplied upstream package owns the feature-layer convention.
         self.layers = tuple(importlib.import_module("flux2.text_encoder").OUTPUT_LAYERS_QWEN3)
+        if not self.layers or min(self.layers) < 0 or max(self.layers) > self.encoder.config.num_hidden_layers:
+            raise ValueError("The text encoder does not provide the required hidden-state layers")
+        self.feature_dim = self.encoder.config.hidden_size * len(self.layers)
         self.context_length = context_length
 
     @torch.no_grad()

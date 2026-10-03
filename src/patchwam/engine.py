@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Distributed optimization and restartable state for the patch flow objective."""
 
-import json
 import hashlib
+import json
 import math
 import os
 import random
@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from accelerate import Accelerator
+from accelerate.utils import DistributedType
 from torch.utils.data import DataLoader, Sampler
 
 
@@ -45,8 +46,10 @@ class RunSettings:
                 raise ValueError(f"{key} must be positive")
         if self.max_updates is not None and self.max_updates < 1:
             raise ValueError("max_updates must be positive")
-        if self.learning_rate <= 0 or self.workers < 0 or (self.warmup_updates is not None and self.warmup_updates < 0):
+        if not math.isfinite(self.learning_rate) or self.learning_rate <= 0 or self.workers < 0 or (self.warmup_updates is not None and self.warmup_updates < 0):
             raise ValueError("Invalid optimizer or loader settings")
+        if any(not math.isfinite(value) or value < 0 for value in (self.weight_decay, self.gradient_clip)):
+            raise ValueError("Weight decay and gradient clipping must be finite and nonnegative")
         if len(self.betas) != 2 or any(not 0 <= value < 1 for value in self.betas):
             raise ValueError("AdamW betas must be in [0,1)")
         if not 0 <= self.warmup_fraction < 1:
@@ -96,13 +99,17 @@ class OptimizationRun:
             gradient_accumulation_steps=settings.accumulation,
             cpu=settings.cpu,
         )
+        if self.accelerator.distributed_type not in (
+            DistributedType.NO, DistributedType.MULTI_CPU, DistributedType.MULTI_GPU,
+        ):
+            raise ValueError("This engine supports single-process execution and CPU/GPU DDP")
         effective_batch = settings.batch_size * settings.accumulation * self.accelerator.num_processes
         if settings.global_batch_size is not None and effective_batch != settings.global_batch_size:
             raise ValueError(
                 f"Global batch differs from recipe: {effective_batch} vs {settings.global_batch_size}",
             )
         self.directory = Path(settings.output_dir)
-        self.directory.mkdir(parents=True, exist_ok=True)
+        self._on_main("creating the output directory", lambda: self.directory.mkdir(parents=True, exist_ok=True))
         parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
         if not parameters:
             raise ValueError("The model has no trainable parameters")
@@ -158,8 +165,27 @@ class OptimizationRun:
         self.accelerator.register_for_checkpointing(self.scheduler)
         self.updates = self.start_epoch = self.start_batch = 0
         self.last_checkpoint = None
+        def write_settings():
+            path = self.directory / "settings.json"
+            if not path.exists():
+                _write_json(path, asdict(settings))
+        self._on_main("writing run settings", write_settings)
+
+    def _propagate_failure(self, error, operation):
+        failed = torch.tensor(int(error is not None), device=self.accelerator.device)
+        if self.accelerator.reduce(failed, reduction="sum").item():
+            if error is not None:
+                raise error
+            raise RuntimeError(f"Another process failed while {operation}")
+
+    def _on_main(self, operation, action):
+        error = None
         if self.accelerator.is_main_process:
-            _write_json(self.directory / "settings.json", asdict(settings))
+            try:
+                action()
+            except Exception as caught:  # noqa: BLE001 - propagate failures before another rank waits
+                error = caught
+        self._propagate_failure(error, operation)
 
     def restore(self, directory: str | Path):
         directory = Path(directory)
@@ -171,7 +197,16 @@ class OptimizationRun:
         if metadata["total_updates"] != self.total_updates:
             raise ValueError("Exact continuation requires the same scheduler duration")
         if metadata.get("run_signature") != self.run_signature:
-            raise ValueError("Continuation requires unchanged batch, optimizer, seed, and dataset settings")
+            raise ValueError("Continuation requires unchanged batch, optimizer, seed, dataset, model, and assets")
+        cursor = [metadata["updates"], metadata["epoch"], metadata["next_batch"]]
+        if any(type(value) is not int or value < 0 for value in cursor):
+            raise ValueError("Invalid continuation cursor")
+        if cursor[0] > self.total_updates or cursor[1] > self.settings.epochs:
+            raise ValueError("Continuation cursor exceeds the training budget")
+        if cursor[2] >= len(self.loader) or (cursor[1] == self.settings.epochs and cursor[2]):
+            raise ValueError("Continuation cursor exceeds the epoch")
+        if cursor[2] % self.settings.accumulation:
+            raise ValueError("Continuation must start at an accumulation boundary")
         self.accelerator.load_state(str(directory))
         self.updates = metadata["updates"]
         self.start_epoch, self.start_batch = metadata["epoch"], metadata["next_batch"]
@@ -184,6 +219,7 @@ class OptimizationRun:
             "type": type(model).__module__ + "." + type(model).__qualname__,
             "parameters": [(name, list(value.shape), str(value.dtype), value.requires_grad)
                            for name, value in model.named_parameters()],
+            "assets": getattr(model, "asset_signature", None),
         }
         if hasattr(policy, "codec"):
             contract["codec"] = asdict(policy.codec)
@@ -191,21 +227,25 @@ class OptimizationRun:
             contract["objective"] = [policy.video_weight, policy.action_weight, policy.isolate_actions]
         return contract
 
-    def checkpoint(self, epoch: int, next_batch: int):
-        final = self.directory / f"step_{self.updates:07d}"
-        pending = self.directory / f".step_{self.updates:07d}.pending"
+    def checkpoint(self, epoch: int, next_batch: int, *, exhausted=False):
+        name = f"step_{self.updates:07d}" + ("_exhausted" if exhausted else "")
+        final = self.directory / name
+        pending = self.directory / f".{name}.pending"
         conflict = torch.tensor(
             int(self.accelerator.is_main_process and (final.exists() or pending.exists())),
             device=self.accelerator.device,
         )
         if self.accelerator.reduce(conflict, reduction="sum").item():
             raise FileExistsError(f"Checkpoint destination already exists: {final}")
-        if self.accelerator.is_main_process:
-            pending.mkdir()
-        self._synchronize()
-        self.accelerator.save_state(str(pending), safe_serialization=True)
-        self._synchronize()
-        if self.accelerator.is_main_process:
+        self._on_main("creating the checkpoint directory", pending.mkdir)
+        error = None
+        try:
+            self.accelerator.save_state(str(pending), safe_serialization=True)
+        except Exception as caught:  # noqa: BLE001 - every rank must observe a failed state save
+            error = caught
+        self._propagate_failure(error, "saving checkpoint state")
+
+        def publish():
             _write_json(pending / "cursor.json", {
                 "updates": self.updates, "epoch": epoch, "next_batch": next_batch,
                 "world_size": self.accelerator.num_processes,
@@ -213,25 +253,20 @@ class OptimizationRun:
                 "total_updates": self.total_updates,
                 "run_signature": self.run_signature,
                 "dataset_signature": self.dataset_signature,
+                "exhausted": exhausted,
             })
             os.replace(pending, final)
-        self._synchronize()
+        self._on_main("publishing the checkpoint", publish)
         self.last_checkpoint = str(final)
         return final
 
-    def _synchronize(self):
-        if self.accelerator.device.type == "cpu" and torch.distributed.is_initialized():
-            # Device IDs force an MPS barrier on macOS in Accelerate 1.12 / Torch 2.7.
-            torch.distributed.barrier()
-        else:
-            self.accelerator.wait_for_everyone()
-
     def _log(self, values):
-        if self.accelerator.is_main_process:
+        def write():
             record = {"update": self.updates, **values}
             with (self.directory / "metrics.jsonl").open("a") as output:
                 output.write(json.dumps(record) + "\n")
             print(json.dumps(record), flush=True)
+        self._on_main("writing training metrics", write)
 
     def train(self):
         self.model.train()
@@ -240,7 +275,7 @@ class OptimizationRun:
         if hasattr(unwrapped, "freeze_asset_encoders"):
             unwrapped.freeze_asset_encoders()
         self.optimizer.zero_grad(set_to_none=True)
-        if self.updates >= self.total_updates:
+        if self.updates >= self.total_updates or self.start_epoch >= self.settings.epochs:
             return self.last_checkpoint
         for epoch in range(self.start_epoch, self.settings.epochs):
             self.loader_generator.manual_seed(self.settings.seed + epoch)
@@ -249,6 +284,8 @@ class OptimizationRun:
                 self.loader.set_epoch(epoch)
             skip = self.start_batch if epoch == self.start_epoch else 0
             epoch_loader = self.accelerator.skip_first_batches(self.loader, skip) if skip else self.loader
+            group_metrics = {}
+            group_count = 0
             for batch_number, batch in enumerate(epoch_loader, start=skip):
                 with self.accelerator.accumulate(self.model):
                     result = self.model(batch)
@@ -256,25 +293,37 @@ class OptimizationRun:
                     invalid = (~torch.isfinite(loss.detach())).to(torch.int32)
                     if self.accelerator.reduce(invalid, reduction="sum").item():
                         raise FloatingPointError("Non-finite loss on at least one rank")
-                    self.accelerator.backward(loss)
+                    group_start = batch_number // self.settings.accumulation * self.settings.accumulation
+                    group_size = min(self.settings.accumulation, len(self.loader) - group_start)
+                    # Accelerate divides by the configured accumulation even for a short final group.
+                    self.accelerator.backward(loss * (self.settings.accumulation / group_size))
+                    for name, value in result.items():
+                        if torch.is_tensor(value) and value.numel() == 1:
+                            detached = value.detach().float()
+                            group_metrics[name] = group_metrics.get(name, 0) + detached
+                    group_count += 1
                     if self.accelerator.sync_gradients:
-                        if self.settings.gradient_clip:
-                            self.accelerator.clip_grad_norm_(
-                                self.model.parameters(), self.settings.gradient_clip,
-                            )
+                        norm = self.accelerator.clip_grad_norm_(
+                            self.model.parameters(), self.settings.gradient_clip or float("inf"),
+                        )
+                        if self.accelerator.scaler is None:
+                            invalid_gradient = (~torch.isfinite(norm)).to(torch.int32)
+                            if self.accelerator.reduce(invalid_gradient, reduction="sum").item():
+                                self.optimizer.zero_grad(set_to_none=True)
+                                raise FloatingPointError("Non-finite gradient on at least one rank")
                     self.optimizer.step()
                     self.optimizer.zero_grad(set_to_none=True)
-                    if not self.accelerator.sync_gradients or self.accelerator.optimizer_step_was_skipped:
+                    if not self.accelerator.sync_gradients:
+                        continue
+                    values = {name: value / group_count for name, value in group_metrics.items()}
+                    group_metrics, group_count = {}, 0
+                    if self.accelerator.optimizer_step_was_skipped:
                         continue
                     self.scheduler.step()
                     self.updates += 1
                     if self.updates == 1 or self.updates % self.settings.log_every == 0:
-                        values = {}
-                        for name, value in result.items():
-                            if torch.is_tensor(value) and value.numel() == 1:
-                                values[name] = self.accelerator.reduce(
-                                    value.detach().float(), reduction="mean",
-                                ).item()
+                        values = {name: self.accelerator.reduce(value, reduction="mean").item()
+                                  for name, value in values.items()}
                         values["learning_rate"] = self.scheduler.get_last_lr()[0]
                         self._log(values)
                     next_epoch, next_batch = epoch, batch_number + 1
@@ -286,7 +335,5 @@ class OptimizationRun:
                     if finished:
                         return self.last_checkpoint
         # A skipped fp16 optimizer step can exhaust the epoch budget early.
-        final = self.directory / f"step_{self.updates:07d}"
-        if not final.exists():
-            self.checkpoint(self.settings.epochs, 0)
+        self.checkpoint(self.settings.epochs, 0, exhausted=True)
         return self.last_checkpoint

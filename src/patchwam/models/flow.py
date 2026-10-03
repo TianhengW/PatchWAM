@@ -2,6 +2,7 @@
 """Continuous rectified-flow training and the descending Euler schedule."""
 
 import math
+
 import torch
 from torch import Tensor
 

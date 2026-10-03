@@ -5,11 +5,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: black-forest-labs/flux2
+          ref: 50fe5162777813d869182b139e83b10743caef15
+          path: .external/flux2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: python -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cpu
-      - run: python -m pip install -e '.[dev]'
+      - run: python -m pip install -e '.[dev,flux]'
+      - run: python -m pip check
       - run: python -m pytest -q
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.external/flux2/src
       - run: patchwam smoke --output runs/ci-smoke --updates 2
       - run: python -m build

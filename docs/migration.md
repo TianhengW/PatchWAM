@@ -24,8 +24,12 @@ recorded separately before selecting an initialization or comparing benchmark sc
 
 The new optimization engine preserves model/optimizer/scheduler/RNG state and deterministic
 epoch sample permutations. Mid-epoch continuation with asynchronous data workers may produce
-different augmentation draws; use `workers=0` for exact CPU resume comparisons. Multi-rank
-checkpointing and full-size GPU throughput still need validation on the target cluster.
+different augmentation draws because prefetched worker state is not checkpointed; use
+`workers=0` for exact CPU resume comparisons. Single-process and two-process CPU resume have
+dedicated verification. Shared-filesystem multi-node GPU checkpointing and full-size GPU
+throughput still need validation on the target cluster. The supported launch modes are a
+single process, CPU distributed data parallel, and GPU distributed data parallel; sharded
+optimizer/model launch modes are rejected until their state-saving contracts are implemented.
 
 
 ## Verification in this development version
@@ -34,7 +38,19 @@ CPU tests cover patch packing, attention visibility, official FLUX.2 micro-layer
 native policy weight validation and rejection, complete-state resume, scheduler curves, realistic
 LeRobot v2 parquet/MP4 samples, normalization, camera composition, and data augmentation.
 A two-process CPU gloo optimization completed two updates and saved a complete checkpoint.
+An additional two-process run verified exact interrupted/resumed weights after four
+updates, partial-group gradients, single-rank nonfinite-gradient rejection, and collective
+checkpoint directory/save/publish failure handling.
 Wheel and source distribution builds include Apache-2.0, MIT notices, and data provenance.
+Regression coverage also checks partial accumulation groups, accumulation-group metric
+averages, finite gradients, process-local eager CUDA asset loading, and checkpoint I/O
+failure propagation. CPU CI installs the optional text-encoding dependencies and runs the
+official micro-layer tests against the pinned source revision rather than skipping them.
+The local asset factory also has a full CPU test using miniature transformer/autoencoder
+weights and a 28-layer text encoder, including raw-image training and action sampling.
+Resume signatures include frozen asset and source identities. Large model weights,
+videos, and text-cache files use path/size/modification-time metadata; small model config
+and source files also have content hashes. Complete large payloads are not hashed.
 
 Current numerical and interface differences requiring GPU parity review:
 

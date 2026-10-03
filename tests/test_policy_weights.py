@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from torch import nn
 from safetensors.torch import load_file, save_file
+from torch import nn
 
 from patchwam.checkpoints import load_policy_weights, register_compact_policy_state
 from patchwam.models import make_tiny_policy
@@ -26,7 +26,7 @@ def test_native_policy_weights_load_completely(tmp_path, wrapped):
         torch.testing.assert_close(value, source.state_dict()[name], rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("damage", ["shape", "missing", "unexpected"])
+@pytest.mark.parametrize("damage", ["shape", "missing", "unexpected", "nonfinite", "integer", "overflow"])
 def test_invalid_policy_weights_do_not_change_any_parameters(tmp_path, damage):
     source, destination = make_tiny_policy(), make_tiny_policy()
     before = weight_copy(destination)
@@ -36,8 +36,14 @@ def test_invalid_policy_weights_do_not_change_any_parameters(tmp_path, damage):
         weights[key] = torch.ones(1)
     elif damage == "missing":
         del weights[key]
-    else:
+    elif damage == "unexpected":
         weights["unrecognized.weight"] = torch.ones(1)
+    elif damage == "nonfinite":
+        weights[key].flatten()[0] = float("nan")
+    elif damage == "integer":
+        weights[key] = weights[key].long()
+    else:
+        weights[key] = torch.full_like(weights[key], 1e100, dtype=torch.float64)
     path = tmp_path / "invalid.safetensors"
     save_file(weights, str(path))
     with pytest.raises(ValueError):
@@ -89,3 +95,52 @@ def test_compact_hook_roundtrip_excludes_frozen_encoder_weights(tmp_path):
     for name, tensor in policy.state_dict().items():
         torch.testing.assert_close(tensor, expected[name], rtol=0, atol=0)
     torch.testing.assert_close(wrapper.autoencoder.weight, asset_before, rtol=0, atol=0)
+
+
+def test_asset_signature_detects_weight_metadata_and_small_source_content_changes(tmp_path):
+    import os
+
+    from patchwam.models.flux import _asset_identity
+
+    transformer = tmp_path / "transformer.safetensors"
+    autoencoder = tmp_path / "autoencoder.safetensors"
+    source = tmp_path / "model.py"
+    text_dir = tmp_path / "text"
+    text_dir.mkdir()
+    transformer.write_bytes(b"weights")
+    autoencoder.write_bytes(b"encoder")
+    source.write_text("value = 1")
+    (text_dir / "config.json").write_text('{"hidden_size": 32}')
+    modules = (SimpleNamespace(__file__=str(source)),)
+    first = _asset_identity(transformer, autoencoder, text_dir, modules)
+    original_time = source.stat().st_mtime_ns
+    source.write_text("value = 2")
+    os.utime(source, ns=(original_time, original_time))
+    second = _asset_identity(transformer, autoencoder, text_dir, modules)
+    assert first["source"][0]["size"] == second["source"][0]["size"]
+    assert first["source"][0]["mtime_ns"] == second["source"][0]["mtime_ns"]
+    assert first != second
+    autoencoder.write_bytes(b"different encoder")
+    assert second != _asset_identity(transformer, autoencoder, text_dir, modules)
+
+
+def test_explicit_backbone_source_rejects_previously_imported_other_tree(tmp_path, monkeypatch):
+    import sys
+
+    from patchwam.models import FluxAssetPolicy, flux
+
+    transformer = tmp_path / "transformer.safetensors"
+    autoencoder = tmp_path / "autoencoder.safetensors"
+    text_dir = tmp_path / "text"
+    text_dir.mkdir()
+    transformer.write_bytes(b"weights")
+    autoencoder.write_bytes(b"weights")
+    source_root = tmp_path / "requested"
+    package = source_root / "src" / "flux2"
+    package.mkdir(parents=True)
+    (package / "model.py").write_text("")
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    monkeypatch.setattr(flux.importlib, "import_module", lambda name: SimpleNamespace(__file__=str(tmp_path / "other.py")))
+    with pytest.raises(RuntimeError, match="Another FLUX.2 source"):
+        FluxAssetPolicy.from_local_assets(str(transformer), str(autoencoder), str(text_dir),
+                                         flux_source=str(source_root), device="cpu")

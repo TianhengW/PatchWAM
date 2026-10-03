@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+import torch
 from safetensors.torch import load_file, save_file
 
 
@@ -21,6 +22,10 @@ def load_policy_weights(model, path):
     for name, tensor in weights.items():
         if tensor.shape != expected[name].shape:
             raise ValueError(f"Weight shape differs for {name}: {tensor.shape} vs {expected[name].shape}")
+        if expected[name].is_floating_point() and (
+            not tensor.is_floating_point() or not torch.isfinite(tensor.to(dtype=expected[name].dtype)).all()
+        ):
+            raise ValueError(f"Weight values are invalid for {name}")
     policy.load_state_dict(weights, strict=True)
     return {"loaded_tensors": len(weights)}
 
@@ -44,7 +49,7 @@ def register_compact_policy_state(accelerator):
         for index in range(len(models) - 1, -1, -1):
             model = compact(models[index])
             if model is not None:
-                model.policy.load_state_dict(load_file(str(Path(input_dir) / f"policy_{index}.safetensors")), strict=True)
+                load_policy_weights(model, Path(input_dir) / f"policy_{index}.safetensors")
                 models.pop(index)
 
     accelerator.register_save_state_pre_hook(save_hook)

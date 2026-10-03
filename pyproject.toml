@@ -7,7 +7,7 @@ name = "patchwam"
 version = "0.1.0.dev0"
 description = "An Action Is Worth One Patch: Unified World-Action Modeling"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "licenses/*.txt"]
 authors = [{name = "PatchWAM contributors"}]

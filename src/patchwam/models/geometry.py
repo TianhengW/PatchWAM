@@ -48,7 +48,7 @@ def joint_visibility(
     if text_valid.ndim != 2 or text_valid.shape[1] != text_length:
         raise ValueError("text_valid must have shape [batch, text_length]")
     allowed = allowed[None, None].expand(text_valid.shape[0], 1, total, total).clone()
-    allowed[..., :text_length] &= text_valid[:, None, None].bool()
+    allowed[..., :text_length] &= text_valid[:, None, None].to(device=allowed.device, dtype=torch.bool)
     return allowed
 
 

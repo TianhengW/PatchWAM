@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Parameter-free action coordinates in the visual token space."""
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import torch
 from torch import Tensor

@@ -40,6 +40,7 @@ class _Episode:
     info: dict
     rows: np.ndarray
     tasks: dict
+    columns: tuple[str, ...]
 
 
 def _json_lines(path):
@@ -104,7 +105,9 @@ class EpisodeDataset(Dataset):
         self.context_len, self.qwen_cache = int(context_len), qwen_text_cache_dir
         self.qwen_context_len, self.qwen_format = int(qwen_context_len), qwen_text_cache_format
         self.override_instruction, self.prompt_template = override_instruction, prompt_template
-        self.video_tolerance = lerobot_tolerance_s
+        self.video_tolerance = 1e-4 if lerobot_tolerance_s is None else float(lerobot_tolerance_s)
+        if not np.isfinite(self.video_tolerance) or self.video_tolerance <= 0:
+            raise ValueError("Video timestamp tolerance must be finite and positive")
         if isinstance(video_augmentation, dict):
             appearance_keys = {"photometric", "style", "fourier", "background"}
             augmentation_type = AppearanceRandomizer if appearance_keys & set(video_augmentation) else ClipAugment
@@ -125,7 +128,10 @@ class EpisodeDataset(Dataset):
             info = json.loads((root / "meta/info.json").read_text(encoding="utf-8"))
             if str(info.get("codebase_version", "v2")).startswith("v3"):
                 raise ValueError(f"LeRobot v3 root cannot be opened as v2: {root}")
-            fps.add(float(info["fps"]))
+            root_fps = float(info["fps"])
+            if not np.isfinite(root_fps) or root_fps <= 0:
+                raise ValueError(f"Dataset FPS must be finite and positive: {root}")
+            fps.add(root_fps)
             chunk_size = int(info.get("chunks_size", 1000))
             episode_meta = _json_lines(root / "meta/episodes.jsonl")
             indices = sorted(int(item["episode_index"]) for item in episode_meta)
@@ -156,7 +162,12 @@ class EpisodeDataset(Dataset):
             for index in indices:
                 template = info.get("data_path", "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet")
                 path = root / template.format(episode_chunk=index // chunk_size, episode_index=index)
-                length = pq.ParquetFile(path).metadata.num_rows
+                parquet = pq.ParquetFile(path)
+                length = parquet.metadata.num_rows
+                if "timestamp" in parquet.schema_arrow.names:
+                    times = np.asarray(parquet.read(columns=["timestamp"])["timestamp"].to_pylist(), dtype=np.float64)
+                    if not np.isfinite(times).all() or (len(times) > 1 and np.any(np.abs(np.diff(times) - 1 / root_fps) > self.video_tolerance)):
+                        raise ValueError(f"Episode timestamps do not match dataset FPS: {path}")
                 if str(index) in ranges:
                     chosen = set()
                     for start, end in ranges[str(index)]:
@@ -165,7 +176,7 @@ class EpisodeDataset(Dataset):
                 else:
                     rows = np.arange(length, dtype=np.int64)
                 if len(rows):
-                    self.episodes.append(_Episode(root, index, path, info, rows, tasks))
+                    self.episodes.append(_Episode(root, index, path, info, rows, tasks, tuple(parquet.schema_arrow.names)))
         if len(fps) != 1:
             raise ValueError(f"Dataset roots must share FPS, received {sorted(fps)}")
         if not self.episodes:
@@ -184,11 +195,11 @@ class EpisodeDataset(Dataset):
         self.fingerprint = self._fingerprint()
 
     def _fingerprint(self):
-        """Hash input metadata, statistics and the concrete sample-selection contract.
+        """Hash metadata, statistics and the concrete sample-selection contract.
 
-        Full video and parquet payloads are outside this fingerprint's scope.
-        Parquet byte size and modification time are included to detect ordinary
-        local edits; metadata and statistics are hashed by actual content.
+        Media/cache payloads are represented by paths, sizes and modification
+        times, while metadata and statistics are hashed by actual content.
+        External files referenced inside embedded-image columns are excluded.
         """
         def canonical(value):
             if isinstance(value, Path):
@@ -208,9 +219,24 @@ class EpisodeDataset(Dataset):
             if str(episode.root) not in roots:
                 roots[str(episode.root)] = {name: (episode.root / "meta" / name).read_text(encoding="utf-8") if (episode.root / "meta" / name).exists() else None for name in ("info.json", "episodes.jsonl", "tasks.jsonl")}
         processor_config = {name: getattr(self.processor, name) for name in ("action_output_dim", "proprio_output_dim", "norm_default_mode", "norm_exception_mode", "stepwise", "relative_joint_keys", "delta_action_dim_mask", "training")}
+
+        def file_metadata(path):
+            path = Path(path).expanduser().resolve()
+            stat = path.stat()
+            return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+        videos = [file_metadata(self._video_path(episode, column)) for episode in self.episodes for meta in self.shape_meta["images"] if (column := _column_name(meta, "images")) not in episode.columns]
+        cache_directories = []
+        for cache in (self.text_cache if self.require_text_cache else None, self.qwen_cache):
+            if cache is not None:
+                directory = Path(cache).expanduser().resolve()
+                if not directory.is_dir():
+                    raise ValueError(f"Text cache must be an existing directory: {directory}")
+                cache_directories.append({"directory": str(directory), "files": [file_metadata(path) for path in sorted(directory.rglob("*.pt"))]})
         payload = {
-            "scope": "metadata_statistics_selection_and_parquet_stat_v1", "roots": roots,
+            "scope": "metadata_statistics_selection_and_media_cache_stat_v2", "roots": roots,
             "episodes": [{"root": str(item.root), "index": item.index, "rows": item.rows.tolist(), "parquet_size": item.path.stat().st_size, "parquet_mtime_ns": item.path.stat().st_mtime_ns} for item in self.episodes],
+            "videos": videos, "cache_directories": cache_directories,
             "shape_meta": self.shape_meta, "statistics": self.statistics, "processor": processor_config,
             "frames": self.num_frames, "frame_stride": self.frame_stride, "sample_stride": self.sample_stride, "image_steps": self.image_steps,
             "video_size": self.video_size, "layout": self.layout, "robotwin_layout": self.robotwin_layout,
@@ -225,8 +251,15 @@ class EpisodeDataset(Dataset):
         return (self.ends[-1] + self.sample_stride - 1) // self.sample_stride
 
     @staticmethod
-    @lru_cache(maxsize=4)
     def _table(path):
+        path = Path(path)
+        stat = path.stat()
+        return EpisodeDataset._read_table(str(path), stat.st_size, stat.st_mtime_ns)
+
+    @staticmethod
+    @lru_cache(maxsize=4)
+    def _read_table(path, size, mtime_ns):
+        """Size and modification time invalidate cached reads after replacement."""
         import pyarrow.parquet as pq
         return pq.read_table(path)
 
@@ -243,8 +276,7 @@ class EpisodeDataset(Dataset):
         if column in table.column_names:
             values = table[column].take(rows.tolist()).to_pylist()
             return torch.stack([self._embedded_frame(value, episode.root) for value in values])
-        template = episode.info.get("video_path", "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4")
-        path = episode.root / template.format(episode_chunk=episode.index // int(episode.info.get("chunks_size", 1000)), episode_index=episode.index, video_key=column)
+        path = self._video_path(episode, column)
         if "timestamp" in table.column_names:
             times = np.asarray(table["timestamp"].take(rows.tolist()).to_pylist(), dtype=np.float64)
         else:
@@ -253,7 +285,7 @@ class EpisodeDataset(Dataset):
 
         targets = sorted(set(times.tolist()))
         frames = {}
-        tolerance = self.video_tolerance or (1 / float(episode.info["fps"]) + 1e-3)
+        tolerance = self.video_tolerance
         with av.open(str(path)) as container:
             stream = container.streams.video[0]
             container.seek(max(0, int((targets[0] - tolerance) * av.time_base)), backward=True)
@@ -270,6 +302,11 @@ class EpisodeDataset(Dataset):
         if any(target not in frames for target in targets):
             raise RuntimeError(f"Could not decode requested timestamps from {path}")
         return torch.stack([frames[float(target)][1] for target in times])
+
+    @staticmethod
+    def _video_path(episode, column):
+        template = episode.info.get("video_path", "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4")
+        return episode.root / template.format(episode_chunk=episode.index // int(episode.info.get("chunks_size", 1000)), episode_index=episode.index, video_key=column)
 
     def _fields(self, episode, table, positions):
         result = {}
@@ -310,31 +347,38 @@ class EpisodeDataset(Dataset):
         for key in ("action_dim_is_pad", "state_dim_is_pad", "embodiment"):
             if key in table.column_names:
                 sample[key] = table[key][int(episode.rows[start])].as_py()
+        if "embodiment" in sample:
+            sample["embodiment"] = str(sample["embodiment"])
         result = self.processor.preprocess(sample)
         cameras = result.pop("images")
         if self.video_augmentation is not None:
             cameras = self.video_augmentation(cameras)
         result["video"] = compose_cameras(cameras, self.layout, self.video_size, self.robotwin_layout)
         result["proprio"] = result["proprio"][:-1]
+        result["proprio_is_pad"] = result["proprio_is_pad"][:-1]
         prompt = self.prompt_template.format(task=result["instruction"])
         result["prompt"] = result["instruction"] = prompt
         if self.require_text_cache:
-            path = Path(self.text_cache) / f"{sha256(prompt.encode()).hexdigest()}.t5_len{self.context_len}.wan22ti2v5b.pt"
+            path = Path(self.text_cache).expanduser() / f"{sha256(prompt.encode()).hexdigest()}.t5_len{self.context_len}.wan22ti2v5b.pt"
             payload = torch.load(path, map_location="cpu", weights_only=True)
             context, mask = payload["context"].clone(), payload["mask"].bool()
             if context.ndim != 2 or context.shape[0] != self.context_len or mask.shape != (self.context_len,):
                 raise ValueError(f"Unexpected text cache shape: {path}")
             context[~mask] = 0
-            result.update(context=context, context_mask=torch.ones_like(mask))
+            result.update(context=context, context_mask=torch.ones_like(mask), text_cache_format="t5")
         if self.qwen_cache:
             if self.qwen_format not in {"qwen2_5_vl", "qwen3_flux2"}:
                 raise ValueError(f"Unsupported text cache format {self.qwen_format}")
-            path = Path(self.qwen_cache) / f"{sha256(prompt.encode()).hexdigest()}.{self.qwen_format}_len{self.qwen_context_len}.pt"
+            path = Path(self.qwen_cache).expanduser() / f"{sha256(prompt.encode()).hexdigest()}.{self.qwen_format}_len{self.qwen_context_len}.pt"
             payload = torch.load(path, map_location="cpu", weights_only=True)
             text, mask = payload["text_hidden_states"], payload["text_attention_mask"].bool()
             if text.ndim != 2 or text.shape[0] != self.qwen_context_len or mask.shape != (self.qwen_context_len,):
                 raise ValueError(f"Unexpected text cache shape: {path}")
-            result.update(text_hidden_states=text, text_attention_mask=mask)
+            if self.qwen_format == "qwen3_flux2":
+                result.update(text_tokens=text, text_valid=mask)
+            else:
+                result.update(text_hidden_states=text, text_attention_mask=mask)
+            result["text_cache_format"] = self.qwen_format
         if "embodiment" in sample:
             result["embodiment"] = sample["embodiment"]
         return result
@@ -344,7 +388,7 @@ class EpisodeDataset(Dataset):
         grouped = {}
         for episode in self.episodes:
             table = self._table(str(episode.path))
-            embodiment = table["embodiment"][int(episode.rows[0])].as_py() if "embodiment" in table.column_names else "default"
+            embodiment = str(table["embodiment"][int(episode.rows[0])].as_py()) if "embodiment" in table.column_names else "default"
             group = grouped.setdefault(embodiment, {field: {meta["key"]: [] for meta in self.shape_meta[field]} for field in ("action", "state")})
             fields = {field: {meta["key"]: _feature_tensor(table, _column_name(meta, field), episode.rows) for meta in self.shape_meta[field]} for field in ("action", "state")}
             actions = {}
@@ -359,30 +403,45 @@ class EpisodeDataset(Dataset):
                         mask = torch.as_tensor(table[mask_name][int(episode.rows[0])].as_py(), dtype=torch.bool)
                         value = value.masked_fill(mask, 0)
                     stats = {}
-                    for prefix, axis in (("global_", (0, 1)), ("stepwise_", 0)):
-                        flattened = value.flatten(0, 1) if isinstance(axis, tuple) else value
-                        count = flattened.shape[0]
-                        stats[prefix + "mean"] = flattened.mean(0)
-                        stats[prefix + "var"] = flattened.var(0, correction=1) if count > 1 else torch.zeros_like(flattened.mean(0))
-                        stats[prefix + "min"] = flattened.amin(0)
-                        stats[prefix + "max"] = flattened.amax(0)
-                        stats[prefix + "q01"] = torch.quantile(flattened, 0.01, dim=0)
-                        stats[prefix + "q99"] = torch.quantile(flattened, 0.99, dim=0)
+                    stats["stepwise_mean"] = value.mean(0)
+                    stats["stepwise_var"] = value.var(0, correction=1) if value.shape[0] > 1 else torch.zeros_like(value.mean(0))
+                    stats["stepwise_min"] = value.amin(0)
+                    stats["stepwise_max"] = value.amax(0)
+                    stats["stepwise_q01"] = torch.quantile(value, 0.01, dim=0)
+                    stats["stepwise_q99"] = torch.quantile(value, 0.99, dim=0)
+                    flattened = value.flatten(0, 1)
+                    stats["global_mean"] = flattened.mean(0)
+                    stats["global_var"] = flattened.var(0, correction=1) if flattened.shape[0] > 1 else torch.zeros_like(flattened.mean(0))
+                    stats["global_q01"] = torch.quantile(flattened, 0.01, dim=0)
+                    stats["global_q99"] = torch.quantile(flattened, 0.99, dim=0)
                     group[field][key].append(stats)
         merged = {}
+        per_embodiment = set(grouped) != {"default"}
         for embodiment, group in grouped.items():
             result = {"action": {}, "state": {}}
             for field, features in group.items():
                 for key, episodes in features.items():
                     stats = {}
-                    for prefix in ("global_", "stepwise_"):
-                        means = torch.stack([item[prefix + "mean"] for item in episodes])
-                        variances = torch.stack([item[prefix + "var"] for item in episodes])
-                        mean = means.mean(0)
-                        stats[prefix + "mean"] = mean
-                        stats[prefix + "std"] = (variances + (means - mean) ** 2).mean(0).sqrt()
-                        for name, reduction in (("min", "amin"), ("max", "amax"), ("q01", "amin"), ("q99", "amax")):
-                            stats[prefix + name] = getattr(torch.stack([item[prefix + name] for item in episodes]), reduction)(0)
+                    means = torch.stack([item["stepwise_mean"] for item in episodes])
+                    variances = torch.stack([item["stepwise_var"] for item in episodes])
+                    mean = means.mean(0)
+                    global_mean = means.mean((0, 1))
+                    stats["stepwise_mean"] = mean
+                    stats["stepwise_std"] = (variances + (means - mean) ** 2).mean(0).sqrt()
+                    stats["global_mean"] = global_mean
+                    stats["global_std"] = (variances + (means - global_mean) ** 2).mean((0, 1)).sqrt()
+                    for name, reduction in (("min", "amin"), ("max", "amax"), ("q01", "amin"), ("q99", "amax")):
+                        stepwise = getattr(torch.stack([item["stepwise_" + name] for item in episodes]), reduction)(0)
+                        stats["stepwise_" + name] = stepwise
+                        stats["global_" + name] = getattr(stepwise, reduction)(0)
+                    if per_embodiment:
+                        global_means = torch.stack([item["global_mean"] for item in episodes])
+                        global_variances = torch.stack([item["global_var"] for item in episodes])
+                        global_mean = global_means.mean(0)
+                        stats["global_mean"] = global_mean
+                        stats["global_std"] = (global_variances + (global_means - global_mean) ** 2).mean(0).sqrt()
+                        for name, reduction in (("q01", "amin"), ("q99", "amax")):
+                            stats["global_" + name] = getattr(torch.stack([item["global_" + name] for item in episodes]), reduction)(0)
                     result[field][key] = stats
             merged[embodiment] = result
         metadata = {"num_episodes": len(self.episodes), "num_transition": self.ends[-1]}

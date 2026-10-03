@@ -23,13 +23,18 @@ image/action weights 0.5/1.
 RobotWin uses its non-idle frame ranges. The C2R recipe additionally selects
 the first 50 episodes of each 550-episode block and applies photometric, style,
 and Fourier appearance augmentation with probability 0.8. Background replacement
-is disabled. It runs up to 150000 updates and uses 10 inference steps with a
-16-action replanning horizon. Other recipes keep their separately configured
+is disabled. It runs up to 150000 updates. Its `inference` section records the
+intended evaluation protocol: 10 denoising steps and a 16-action replanning
+horizon. The training CLI does not execute evaluation or apply these inference
+settings; an evaluation caller must pass `steps=10` to `sample_actions` and
+implement the controller's replanning schedule. Other recipes keep their separately configured
 sample sets and augmentation parameters.
 
 Dataset roots, normalization statistics, non-idle filters, official model source,
 and pretrained model assets are supplied through explicit configuration paths.
 The engine verifies the configured global batch before optimization.
+Eager model loading binds `device: cuda` to each launched process's local CUDA
+device. Explicit CUDA indices must match the selected process device.
 
 Weight-only initialization accepts complete native policy safetensors parameters.
 Every parameter name and shape must match before loading. Full training-state

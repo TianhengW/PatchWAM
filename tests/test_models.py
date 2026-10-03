@@ -5,8 +5,14 @@ import torch
 from torch import nn
 
 from patchwam.models import (
-    FluxAssetPolicy, PatchFlowPolicy, RepeatedActionCodec, ShiftedFlow,
-    joint_visibility, make_tiny_policy, raster_coordinates, sequence_coordinates,
+    FluxAssetPolicy,
+    PatchFlowPolicy,
+    RepeatedActionCodec,
+    ShiftedFlow,
+    joint_visibility,
+    make_tiny_policy,
+    raster_coordinates,
+    sequence_coordinates,
 )
 from patchwam.models.flow import masked_sample_mse
 from patchwam.models.geometry import flatten_image_latents, restore_image_latents
@@ -124,6 +130,31 @@ def test_invalid_labels_are_sanitized_before_encoding_and_do_not_affect_loss():
         torch.testing.assert_close(original[key], corrupt[key])
 
 
+def test_invalid_text_padding_is_inert_in_loss_and_gradients():
+    model = make_tiny_policy()
+    sample = batch()
+    sample["text_valid"] = torch.tensor([[True, False, True], [False, True, True]])
+    damaged = dict(sample, text_tokens=sample["text_tokens"].clone())
+    damaged["text_tokens"][~sample["text_valid"]] = float("nan")
+    baseline = model(sample, generator=torch.Generator().manual_seed(10))
+    losses = model(damaged, generator=torch.Generator().manual_seed(10))
+    for name in baseline:
+        torch.testing.assert_close(baseline[name], losses[name], rtol=0, atol=0)
+    losses["loss"].backward()
+    assert all(torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None)
+
+
+def test_tiny_factory_honors_custom_token_width():
+    model = make_tiny_policy(token_dim=64)
+    sample = batch()
+    sample["reference_tokens"] = torch.randn(2, 4, 64)
+    sample["future_tokens"] = torch.randn(2, 4, 64)
+    loss = model(sample)["loss"]
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert model.sample_actions(sample, steps=2)["future_tokens"].shape == (2, 4, 64)
+
+
 def test_clean_prefix_does_not_depend_on_generated_tokens():
     model = make_tiny_policy()
     sample = batch()
@@ -211,3 +242,36 @@ def test_raw_video_wrapper_freezes_assets_and_uses_the_current_frame_at_inferenc
     assert all(p.grad is None for p in wrapper.autoencoder.parameters())
     observation = dict(sample, video=sample["video"][:, :, 0])
     assert wrapper.sample_actions(observation, steps=2)["action"].shape == (2, 16, 14)
+
+
+def test_cached_observations_are_cast_to_policy_and_retain_text_padding():
+    wrapper = FluxAssetPolicy(make_tiny_policy(), MockImageEncoder(), MockTextEncoder()).double()
+    sample = batch()
+    sample["text_valid"] = torch.tensor([[True, False, True], [True, True, False]])
+    sample["text_tokens"][~sample["text_valid"]] = float("nan")
+    encoded = wrapper._encode(sample, target=True)
+    assert encoded["reference_tokens"].dtype == torch.float64
+    assert encoded["future_tokens"].dtype == torch.float64
+    assert encoded["text_tokens"].dtype == torch.float64
+    torch.testing.assert_close(encoded["text_valid"], sample["text_valid"])
+    assert torch.isfinite(wrapper(sample)["loss"])
+    assert wrapper.sample_actions(sample, steps=2)["action"].shape == (2, 16, 14)
+
+
+@pytest.mark.parametrize("cache_format", ["t5", "qwen2_5_vl"])
+def test_incompatible_text_cache_cannot_silently_fall_back_to_prompt_encoding(cache_format):
+    wrapper = FluxAssetPolicy(make_tiny_policy(), MockImageEncoder(), MockTextEncoder())
+    sample = dict(batch(), text_cache_format=[cache_format, cache_format])
+    with pytest.raises(ValueError, match="native Qwen3"):
+        wrapper(sample)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required to exercise host observation masks")
+def test_raw_host_observation_masks_work_with_cuda_encoders():
+    wrapper = FluxAssetPolicy(make_tiny_policy(), MockImageEncoder(), MockTextEncoder()).cuda()
+    sample = {"video": torch.randn(2, 3, 2, 16, 16), "prompt": ["move", "lift"],
+              "action": torch.randn(2, 16, 14), "proprio": torch.randn(2, 14),
+              "action_dim_is_pad": torch.zeros(2, 14, dtype=torch.bool),
+              "action_is_pad": torch.zeros(2, 16, dtype=torch.bool)}
+    losses = wrapper(sample)
+    assert losses["loss"].is_cuda and torch.isfinite(losses["loss"])

@@ -14,7 +14,7 @@
         }
       ],
       "license_notice": "LICENSE-MIT",
-      "modifications": "Adapted affine scaling formula, global and stepwise stats selection, per-embodiment dispatch, constant-field handling, and clipping. Replaced framework utilities with standalone Python and Torch operations; new public API names."
+      "modifications": "Adapted affine scaling formula, global and stepwise stats selection, per-embodiment dispatch, constant-field handling, and clipping. Replaced framework utilities with standalone Python and Torch operations; new public API names. Rejects nonfinite statistics, negative standard deviations, and reversed bounds before preprocessing."
     },
     {
       "file": "processing.py",
@@ -87,7 +87,7 @@
         }
       ],
       "license_notice": "LICENSE-MIT",
-      "modifications": "Independent local read-only LeRobot v2 reader; source reviewed for time offsets, endpoint windows, split/filter and statistics behavior. Does not copy vendored LeRobot code. Raises on corrupt samples instead of silently replacing them; supports embedded images and PyAV videos; v3 is explicitly unsupported."
+      "modifications": "Independent local read-only LeRobot v2 reader; source reviewed for time offsets, endpoint windows, split/filter and statistics behavior. Does not copy vendored LeRobot code. Raises on corrupt samples instead of silently replacing them; supports embedded images and PyAV videos; v3 is explicitly unsupported. Follow-up integrity audit aligns proprio time masks with the cropped horizon, emits native text_tokens/text_valid for compatible Qwen3 caches, validates FPS/timestamp cadence, and restores a strict configurable 1e-4 second video timestamp tolerance. Automatically fitted homogeneous statistics preserve equal-episode/per-step variance aggregation and the per-step quantile envelope. Named-embodiment automatic fitting retains the flattened global quantile/variance recipe separately; numeric embodiment identifiers are normalized to strings to match JSON statistics keys. Cache format metadata lets native policies reject incompatible cached embeddings. Resume fingerprints now include retained video files and configured .pt cache files by path, byte size and modification time; no full media/cache payload hashing is performed. Parquet read-cache keys also include byte size and modification time, preventing reopened datasets from reading stale tables after local replacement."
     },
     {
       "file": "augmentation.py",
@@ -109,7 +109,7 @@
       "status": "adapted_data_processing",
       "sources": [
         {
-          "repository": "local canonical C2R-DR4 reconstruction (source inventory: docs/server_source_audit.md)",
+          "repository": "local canonical C2R-DR4 reconstruction in the hash-locked source archive",
           "commit": "18a2e96285d0911f8ecc2aeb8a7c5bb60aeb8285",
           "path": "src/imagewam/aug/domain_randomization.py",
           "sha256": "f8f7f5e77f753bc1ee253b25a2868abe7aa4081356a32b64a8918ef8aaf86051",
@@ -117,7 +117,7 @@
           "copyright": "Copyright (c) 2026 Yuyang \"Alice.L\""
         },
         {
-          "repository": "local canonical C2R-DR4 reconstruction (source inventory: docs/server_source_audit.md)",
+          "repository": "local canonical C2R-DR4 reconstruction in the hash-locked source archive",
           "commit": "18a2e96285d0911f8ecc2aeb8a7c5bb60aeb8285",
           "path": "src/imagewam/aug/photometric.py",
           "sha256": "1607ee2aceec8db9aec1bf71ad552950027cdd2eac4d1351a302a7bbcb2b1c4d",
@@ -125,7 +125,7 @@
           "copyright": "Copyright (c) 2026 Yuyang \"Alice.L\""
         },
         {
-          "repository": "local canonical C2R-DR4 reconstruction (source inventory: docs/server_source_audit.md)",
+          "repository": "local canonical C2R-DR4 reconstruction in the hash-locked source archive",
           "commit": "18a2e96285d0911f8ecc2aeb8a7c5bb60aeb8285",
           "path": "src/imagewam/aug/style.py",
           "sha256": "b5e88b90526d2bc90d02a350b5298dfe954c6193ecb8a6cb57a30d6548f2d05a",
@@ -133,7 +133,7 @@
           "copyright": "Copyright (c) 2026 Yuyang \"Alice.L\""
         },
         {
-          "repository": "local canonical C2R-DR4 reconstruction (source inventory: docs/server_source_audit.md)",
+          "repository": "local canonical C2R-DR4 reconstruction in the hash-locked source archive",
           "commit": "18a2e96285d0911f8ecc2aeb8a7c5bb60aeb8285",
           "path": "src/imagewam/aug/fourier.py",
           "sha256": "cced17b03979d6c789a63cd9e20344c09619fae66e1811fc50f3a6aa956901a1",
@@ -157,7 +157,7 @@
     "LeRobot v3 merged file layouts are not implemented.",
     "Evaluation parity must be validated against a representative existing dataset and checkpoint before replacing a historical pipeline.",
     "Heterogeneous field remapping is not enabled by this initial pipeline.",
-    "Dataset fingerprint covers metadata content, statistics, selection and parquet byte size/mtime; it does not hash complete video or parquet contents.",
+    "Dataset fingerprint hashes metadata and statistics content plus selection, parquet/video byte size and modification time, and configured .pt text-cache file metadata. It does not hash complete parquet, video or text-cache payloads; external image files referenced inside parquet image columns are outside this metadata guarantee.",
     "AppearanceRandomizer does not support mask-guided background replacement; requesting enabled background replacement raises NotImplementedError."
   ],
   "validation": {
@@ -187,6 +187,21 @@
         16
       ],
       "result": "Exact pixel equality on CPU against the hash-locked source C2R-DR4 augmentation for all 12 fixed seeds, using the complete canonical photometric/style/fourier recipe and background disabled."
+    },
+    "data_integrity_regressions": {
+      "scope": "Synthetic local LeRobot v2 parquet/PNG/MP4 CPU fixtures.",
+      "checks": [
+        "matching proprio/mask horizons",
+        "automatic statistics quantile/variance contract",
+        "native Qwen3 cached inputs",
+        "strict video timestamp alignment",
+        "invalid timestamp cadence",
+        "invalid feature statistics",
+        "named-embodiment fitted statistics and numeric identifiers",
+        "video replacement changes fingerprint",
+        "text-cache replacement changes fingerprint",
+        "same-process parquet replacement invalidates cached reads"
+      ]
     }
   }
 }

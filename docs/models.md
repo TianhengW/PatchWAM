@@ -15,6 +15,9 @@ Prepare the official [FLUX.2 source](https://github.com/black-forest-labs/flux2)
 local model files before starting a benchmark run. The adapter's CPU layer-contract tests
 use revision `50fe5162777813d869182b139e83b10743caef15`; use that revision for the current
 development version. Model preparation never silently substitutes a different model.
+Use the source checkout through `FLUX2_SRC`; the optional dependencies above are
+the versions verified with this adapter. Installing the external repository's
+full dependency set would select a different Torch runtime.
 
 ```bash
 export FLUX2_SRC=/path/to/official/flux2

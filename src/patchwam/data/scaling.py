@@ -25,7 +25,7 @@ def read_statistics(path: str | Path) -> dict[str, Any]:
                 return [convert(item) for item in value]
         return value
 
-    return convert(json.loads(Path(path).read_text(encoding="utf-8")))
+    return convert(json.loads(Path(path).expanduser().read_text(encoding="utf-8")))
 
 
 def write_statistics(stats: dict[str, Any], path: str | Path) -> None:
@@ -46,7 +46,11 @@ class FeatureScaler:
 
     def __init__(self, statistics: dict[str, Any], mode: str = "q01/q99"):
         self.statistics = {key: torch.as_tensor(value, dtype=torch.float32) for key, value in statistics.items()}
+        if not self.statistics or any(not torch.isfinite(value).all() for value in self.statistics.values()):
+            raise ValueError("Feature statistics must be nonempty and finite")
         if mode == "z-score":
+            if (self.statistics["std"] < 0).any():
+                raise ValueError("Feature standard deviations must be nonnegative")
             self.scale = (self.statistics["std"] + 1e-8).reciprocal()
             self.offset = -self.statistics["mean"] * self.scale
         else:
@@ -58,9 +62,13 @@ class FeatureScaler:
                 template = next(iter(self.statistics.values()))
                 low, high = torch.full_like(template, low_value), torch.full_like(template, high_value)
             width = high - low
+            if not torch.isfinite(low).all() or not torch.isfinite(high).all() or not torch.isfinite(width).all() or (width < 0).any():
+                raise ValueError("Feature scaling bounds must be finite and ordered")
             constant = width < 1e-4
             self.scale = 2 / torch.where(constant, torch.full_like(width, 2), width)
             self.offset = torch.where(constant, -low, -1 - low * self.scale)
+        if not torch.isfinite(self.scale).all() or not torch.isfinite(self.offset).all():
+            raise ValueError("Feature scaling coefficients must be finite")
 
     def encode(self, value: torch.Tensor) -> torch.Tensor:
         return (value * self.scale.to(value) + self.offset.to(value)).clamp(-5, 5)

@@ -17,6 +17,7 @@ Use Python 3.11. Install the package in an isolated environment:
 
 ```bash
 uv venv --python 3.11
+source .venv/bin/activate
 uv pip install -e '.[dev]'
 ```
 

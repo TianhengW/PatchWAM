@@ -80,13 +80,14 @@ def test_parquet_images_to_loader_preserves_endpoints_horizon_and_masks(tmp_path
     assert batch["action"].shape == (2, 16, 2)
     assert batch["proprio"].shape == (2, 16, 3)
     assert batch["action_is_pad"].shape == (2, 16)
-    assert batch["proprio_is_pad"].shape == (2, 17)
+    assert batch["proprio_is_pad"].shape == batch["proprio"].shape[:2]
     assert batch["action_dim_is_pad"].shape == (2, 2)
     torch.testing.assert_close(batch["action"][0, :, 0], torch.arange(16) / 10 - 1)
     torch.testing.assert_close(batch["video"][0, :, 1], torch.full((3, 8, 8), 160 / 255 * 2 - 1))
     assert not batch["action_is_pad"].any()
     final = dataset[19]
     assert final["action_is_pad"].tolist() == [False] + [True] * 15
+    assert final["proprio_is_pad"].tolist() == [False] + [True] * 15
     assert final["image_is_pad"].tolist() == [False, True]
 
 
