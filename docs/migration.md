@@ -4,20 +4,19 @@ This file distinguishes prepared code from verified reproduction results.
 
 | Work item | Current state |
 | --- | --- |
-| Original `Concept_WAM/action-as-patch` clone | Cloned, commit `de0db853b937362e29a24d9053ba8e79e3ee8e2f` |
+| Source snapshots | Archived outside this repository with commit and file hashes |
 | New `TianhengW/PatchWAM` repository | Created as a private development repository |
 | Independent model and optimization code | New implementation; CPU verification passed |
 | Data processing provenance and licensing | Complete per-file manifest, MIT notices, normalization/augmentation oracle checks |
 | H800 / Digua training sources | 10 read-only snapshots, 5952 text files; all SHA256 verified; legacy recipes ported |
-| Historical checkpoint import | Strict full single-stream mapping tested with official micro models; large checkpoints unverified |
+| Native policy initialization | Strict safetensors parameter-name and shape validation |
 | Real-data GPU forward and backward | Unverified |
 | Paired fixed-seed closed-loop parity | Unverified |
 | Alternate backbones and expert variants | Pending independent implementation |
 | Public release | Private development version; alternate implementations and GPU reproduction still pending |
 
-The source archive is outside this repository. It contains the original Git clone and
-read-only server snapshots so that independent implementation can be checked against
-documented behavior. A fresh Git history does not remove third-party license obligations.
+Source review records are archived in the local migration workspace. Retained data
+processing keeps its provenance and required license notices.
 
 The latest corrected AAP337/NeMo RoboCasa and RobotWin runs are distinct from the paper's
 FLUX.2 action-patch implementation. Their preprocessing contracts must be audited and
@@ -32,7 +31,7 @@ checkpointing and full-size GPU throughput still need validation on the target c
 ## Verification in this development version
 
 CPU tests cover patch packing, attention visibility, official FLUX.2 micro-layer execution,
-checkpoint key mapping and rejection, complete-state resume, scheduler curves, realistic
+native policy weight validation and rejection, complete-state resume, scheduler curves, realistic
 LeRobot v2 parquet/MP4 samples, normalization, camera composition, and data augmentation.
 A two-process CPU gloo optimization completed two updates and saved a complete checkpoint.
 Wheel and source distribution builds include Apache-2.0, MIT notices, and data provenance.

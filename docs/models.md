@@ -30,7 +30,7 @@ The model factory is `patchwam.models.FluxAssetPolicy.from_local_assets`. Only l
 assets are loaded. The autoencoder and text encoder remain frozen and in evaluation
 mode; the transformer and proprioception projection are trainable.
 
-Historical checkpoint containers and optimizer states use a different module structure.
-Import requires explicit key mapping, strict shape coverage, codec and timestep checks,
-and a paired fixed-seed inference comparison. The CPU tiny-model tests alone do not
-verify that migration.
+Weight-only initialization uses complete native policy safetensors files. Every parameter
+name and tensor shape must match before any model weights are changed. Frozen encoder
+assets are prepared separately. Continuing training requires the complete state directory
+written by the optimization engine.

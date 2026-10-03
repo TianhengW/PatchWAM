@@ -43,14 +43,14 @@ accelerate launch --config_file /path/to/distributed.yaml -m patchwam.cli train 
 
 `--resume` accepts a complete state directory written by this implementation. A directory
 contains model weights, optimizer and scheduler states, RNG states, and a completed cursor
-record. Historical training checkpoints require an explicit mapping and parity validation.
+record. Weight-only initialization uses complete native policy safetensors files.
 
 `configs/robotwin.yaml` preserves global batch 256 with 32 processes, batch 4, and
 accumulation 2. `configs/robotwin_c2r.yaml` and the legacy RoboCasa recipe use 16
 processes with batch 16. The engine checks the configured global batch before training.
 
-Use `--initialize /path/to/research.pt` for the strict full single-stream weight mapping.
-This initializes model weights; it does not resume the historical optimizer or sampler.
+Use `--initialize /path/to/policy.safetensors` to load complete policy weights.
+This initializes model weights; use `--resume` to continue optimizer and sampler state.
 
 ## Layout
 

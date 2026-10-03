@@ -1,57 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Explicit weight import and compact checkpoints for frozen-encoder policies."""
+"""Native policy weights and compact checkpoints for frozen-encoder policies."""
 
 from pathlib import Path
 
-import torch
 from safetensors.torch import load_file, save_file
 
 
-def import_research_weights(model, path):
-    """Import a full single-stream checkpoint without changing training state.
-
-    This maps names and checks complete tensor coverage. It does not establish
-    numerical or closed-loop parity. Expert, LoRA, and partial checkpoints must
-    be converted separately rather than silently dropping their parameters.
-    """
+def load_policy_weights(model, path):
+    """Load a complete native safetensors policy without changing training state."""
+    path = Path(path)
+    if path.suffix != ".safetensors":
+        raise ValueError("Policy weights must use the native .safetensors format")
     policy = getattr(model, "policy", model)
-    if not hasattr(policy.denoiser, "transformer"):
-        raise TypeError("Research weight import requires the official FLUX.2 adapter")
-    payload = torch.load(path, map_location="cpu", weights_only=True)
-    if payload.get("checkpoint_format", "full") != "full":
-        raise ValueError("Only full, unmerged research checkpoint payloads are supported")
-    if "concept_bottleneck" in payload:
-        raise ValueError("Reasoner/expert checkpoint requires a separately implemented architecture")
-    source = payload.get("mot")
-    if not isinstance(source, dict):
-        raise ValueError("Expected a research checkpoint with a mot weight dictionary")
-    prefix = "mixtures.video.transformer."
-    imported = {}
-    aliases = []
-    for key, value in source.items():
-        if not key.startswith(prefix):
-            alias_prefix = "mixtures.video."
-            if key.startswith((alias_prefix + "double_blocks.", alias_prefix + "single_blocks.")):
-                aliases.append((key, value))
-                continue
-            raise ValueError(f"Unsupported checkpoint component: {key}")
-        imported["denoiser.transformer." + key[len(prefix):]] = value
-    for key, value in aliases:
-        canonical = prefix + key[len("mixtures.video."):]
-        if canonical not in source or not torch.equal(value, source[canonical]):
-            raise ValueError(f"Conflicting or incomplete checkpoint alias: {key}")
-    for key, value in payload.get("proprio_encoder", {}).items():
-        imported["state_projection." + key] = value
+    weights = load_file(str(path))
     expected = policy.state_dict()
-    if imported.keys() != expected.keys():
-        missing = sorted(expected.keys() - imported.keys())[:10]
-        extra = sorted(imported.keys() - expected.keys())[:10]
-        raise ValueError(f"Incomplete weight mapping: missing={missing}, unexpected={extra}")
-    for name, tensor in imported.items():
+    if weights.keys() != expected.keys():
+        missing = sorted(expected.keys() - weights.keys())[:10]
+        extra = sorted(weights.keys() - expected.keys())[:10]
+        raise ValueError(f"Incomplete policy weights: missing={missing}, unexpected={extra}")
+    for name, tensor in weights.items():
         if tensor.shape != expected[name].shape:
             raise ValueError(f"Weight shape differs for {name}: {tensor.shape} vs {expected[name].shape}")
-    policy.load_state_dict(imported, strict=True)
-    return {"source_step": payload.get("step"), "mapped_tensors": len(imported)}
+    policy.load_state_dict(weights, strict=True)
+    return {"loaded_tensors": len(weights)}
 
 
 def register_compact_policy_state(accelerator):

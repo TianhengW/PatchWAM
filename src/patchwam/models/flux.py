@@ -9,7 +9,7 @@ attention is different and must not be substituted for this masked execution.
 Supported upstream layer contract: black-forest-labs/flux2, src/flux2/model.py,
 Klein4BParams / Klein9BParams. CPU micro-model integration was tested against
 commit 50fe5162777813d869182b139e83b10743caef15. Checkpoint load is strict;
-older research policy payloads require an explicit conversion.
+Policy initialization uses the native safetensors parameter names.
 """
 
 import importlib
@@ -47,7 +47,7 @@ class OfficialFluxDenoiser(nn.Module):
         self.gradient_checkpointing = gradient_checkpointing
 
     @staticmethod
-    def _heads(projected: Tensor, count: int) -> tuple[Tensor, Tensor, Tensor]:
+    def _split_qkv_heads(projected: Tensor, count: int) -> tuple[Tensor, Tensor, Tensor]:
         return tuple(projected.unflatten(-1, (3, count, -1)).permute(2, 0, 3, 1, 4).unbind(0))
 
     def _attend(self, query: Tensor, key: Tensor, value: Tensor, position: Tensor, visibility: Tensor) -> Tensor:
@@ -62,7 +62,7 @@ class OfficialFluxDenoiser(nn.Module):
             shift, scale, _ = attention_mod
             normalized = getattr(block, name + "_norm1")(states)
             attention = getattr(block, name + "_attn")
-            q, k, v = self._heads(attention.qkv(normalized * (1 + scale) + shift), block.num_heads)
+            q, k, v = self._split_qkv_heads(attention.qkv(normalized * (1 + scale) + shift), block.num_heads)
             q, k = attention.norm(q, k, v)
             projections.append((q, k, v))
         q, k, v = (torch.cat(parts, dim=2) for parts in zip(*projections))
@@ -81,7 +81,7 @@ class OfficialFluxDenoiser(nn.Module):
         attention_input, feedforward_input = projected.split(
             (3 * block.hidden_size, block.mlp_hidden_dim * block.mlp_mult_factor), dim=-1,
         )
-        q, k, v = self._heads(attention_input, block.num_heads)
+        q, k, v = self._split_qkv_heads(attention_input, block.num_heads)
         q, k = block.norm(q, k, v)
         attended = self._attend(q, k, v, position, visibility)
         joint_update = torch.cat((attended, block.mlp_act(feedforward_input)), -1)

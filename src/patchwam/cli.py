@@ -13,7 +13,7 @@ def main():
     train = commands.add_parser("train", help="Train from a YAML configuration")
     train.add_argument("--config", required=True)
     train.add_argument("--resume", help="A complete PatchWAM accelerator state directory")
-    train.add_argument("--initialize", help="Explicitly map full single-stream research weights")
+    train.add_argument("--initialize", help="Load complete native policy safetensors weights")
     train.add_argument("overrides", nargs="*", help="Dotted key=value settings")
     smoke = commands.add_parser("smoke", help="Run a small CPU optimization with a tiny backbone")
     smoke.add_argument("--output", default="runs/smoke")
@@ -31,8 +31,8 @@ def main():
         if args.initialize and args.resume:
             parser.error("Choose either weight initialization or training-state resume")
         if args.initialize:
-            from .checkpoints import import_research_weights
-            print(json.dumps(import_research_weights(model, args.initialize)))
+            from .checkpoints import load_policy_weights
+            print(json.dumps(load_policy_weights(model, args.initialize)))
         dataset = construct(config.data)
         settings = RunSettings(**OmegaConf.to_container(config.training, resolve=True))
         settings.model_config_hash = hashlib.sha256(OmegaConf.to_yaml(config.model).encode()).hexdigest()
