@@ -23,7 +23,9 @@ See the [implementation and verification record](docs/migration.md) for current 
 - [Training configurations](#training-configurations)
 - [Optional conditioning and training](#optional-conditioning-and-training)
 - [Training](#training)
+- [Full-model training validation](#full-model-training-validation)
 - [Checkpoints and continuation](#checkpoints-and-continuation)
+- [Closed-loop evaluation](#closed-loop-evaluation)
 - [Action sampling](#action-sampling)
 - [Verification and troubleshooting](#verification-and-troubleshooting)
 - [Repository layout](#repository-layout)
@@ -450,6 +452,37 @@ Single-process and CPU/GPU DDP execution are supported. Sharded model/optimizer
 launch modes require additional implementation and are rejected by the current engine.
 Multi-node full-size GPU execution still requires validation on the target cluster.
 
+## Full-model training validation
+
+Validate the actual configured model and dataset on an allocated GPU before a
+long training run:
+
+```bash
+patchwam validate --config configs/robotwin.yaml \
+  --output runs/validate-robotwin --updates 2
+```
+
+The validator runs a short uninterrupted baseline and a separate process resumed
+from update 1. It checks finite metrics, successful-update cursors, and equality
+of exported live/EMA weights. It preserves the full model and data processor;
+only the validation batch, accumulation, worker count, epoch/update budget, and
+checkpoint frequency are reduced. The validation schedule is separate from a
+paper training run. Outputs include `validation.json` and both process logs.
+
+Use `--num-processes 8` for a one-node eight-GPU check. Invoke the validator
+directly; it launches its own workers. The full model and optimizer still require
+their ordinary parameter-state memory. GPU resume checks must run inside the
+actual allocation. The CPU orchestration check is:
+
+```bash
+patchwam validate --config configs/smoke.yaml \
+  --output runs/validate-cpu --allow-cpu
+```
+
+Single-process and two-process CPU training/resume checks pass. Real 4B GPU
+execution remains a separate verification stage. See
+[validation and simulator setup](docs/evaluation.md) for the complete workflow.
+
 ## Checkpoints and continuation
 
 ### Run outputs
@@ -521,11 +554,56 @@ the frozen encoder assets must still be supplied separately. Optimizer and sched
 states start fresh. `--initialize` and `--resume` are mutually exclusive.
 Historical checkpoint formats require a separate validated conversion to the native schema.
 
+## Closed-loop evaluation
+
+`patchwam evaluate` runs native checkpoints in RoboCasa, RobotWin/RoboTwin, and
+LIBERO. Each simulator must be installed with its original assets and controller
+configuration. The evaluator reuses training normalization, decodes actions,
+handles chunk replanning, and resets history and queued actions at every episode.
+History advances on every observation, including cached-action steps.
+
+| Configuration | Runtime contract |
+| --- | --- |
+| [`configs/evaluation/libero.yaml`](configs/evaluation/libero.yaml) | LIBERO task suite and provided initial states; explicit gripper/image conventions |
+| [`configs/evaluation/robocasa.yaml`](configs/evaluation/robocasa.yaml) | Human300 Gym action/state layout; other layouts require explicit mappings |
+| [`configs/evaluation/robotwin.yaml`](configs/evaluation/robotwin.yaml) | External direct task API with 14D joint commands, task configuration, and instructions |
+
+For a LIBERO smoke episode:
+
+```bash
+export PATCHWAM_POLICY=/path/to/native/policy_0.safetensors
+patchwam evaluate --config configs/evaluation/libero.yaml
+```
+
+Set `policy.training_config` to the resolved configuration belonging to that
+checkpoint. The templates use one episode and are smoke protocols; a formal
+score requires the original complete task list, seeds, splits, horizons, and
+episode count. They explicitly use 10 solver steps and guidance scale 1.
+RoboDojo history evaluations additionally need the original 8-action replanning
+contract and a matched observation clock.
+Complete the model-asset and dataset environment setup first, or pass
+`policy.training_config=/path/to/run/configuration.yaml` to use the saved,
+resolved training settings and paths.
+
+`results.json` records requested/completed episodes, successes, errors, seeds,
+checkpoint identity, normalization hash, and live/EMA selection. Execution errors
+stop the run and retain a diagnostic record. A success rate is emitted only for
+a complete protocol without execution errors. Continue an interrupted evaluation:
+
+```bash
+patchwam evaluate --config configs/evaluation/libero.yaml --resume
+```
+
+Completed episodes are skipped; failed attempts are retried under the unchanged
+checkpoint and protocol. Simulator-interface tests use test runtimes; actual
+full-model simulator success rates have not yet been verified. See
+[RoboCasa, RobotWin, and LIBERO setup](docs/evaluation.md) for commands, controller
+layouts, instruction providers, and data conventions.
+
 ## Action sampling
 
-The policy API provides `sample_actions`; the training CLI currently has no
-benchmark evaluation command. This executable CPU example demonstrates the API
-with a random tiny policy:
+The policy API provides `sample_actions`; `patchwam evaluate` handles benchmark
+execution. This CPU example demonstrates the API with a random tiny policy:
 
 ```python
 import torch
@@ -563,7 +641,7 @@ load_policy_weights(policy, "/path/to/policy_0.safetensors")
 policy.eval()
 
 batch = next(iter(DataLoader(dataset, batch_size=1, num_workers=0)))
-prediction = policy.sample_actions(batch, horizon=16, steps=20)
+prediction = policy.sample_actions(batch, horizon=16, steps=10)
 embodiment = batch["embodiment"][0] if "embodiment" in batch else None
 actions = dataset.processor.decode_actions(
     prediction["action"].float().cpu(),
@@ -596,7 +674,8 @@ The C2R configuration's `inference` section records a 10-step solver and a 16-ac
 replanning horizon. A caller must explicitly pass `steps=10` and implement that
 controller schedule; the training CLI does not consume the evaluation settings.
 VL and causal-history input preparation are available in the optional configurations.
-Closed-loop adapters, expert variants, and other backbone implementations remain pending.
+Closed-loop adapters apply the explicit evaluation settings. Expert variants and
+other backbone implementations remain pending.
 
 ## Verification and troubleshooting
 
@@ -645,6 +724,8 @@ src/patchwam/
 ├── configuration.py         YAML construction and process-device binding
 ├── engine.py                Distributed optimization, metrics, and continuation
 ├── checkpoints.py           Native weights and compact policy state
+├── validation.py            Selected-model training and resume checks
+├── evaluation/              Online actions and benchmark adapters
 ├── averaging.py             Successful-update EMA and detached teacher execution
 ├── models/
 │   ├── codec.py             Fixed action-patch representation

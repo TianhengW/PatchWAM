@@ -85,3 +85,19 @@ def test_conflicting_initialization_options_fail_before_loading_configuration(mo
     with pytest.raises(SystemExit) as error:
         cli.main()
     assert error.value.code == 2
+
+
+def test_evaluation_cli_forwards_resume_and_protocol_overrides(monkeypatch):
+    from patchwam.evaluation import runner
+
+    captured = {}
+
+    def evaluate(config, overrides, *, resume):
+        captured.update(config=config, overrides=overrides, resume=resume)
+        return {"summary": {"status": "complete"}}
+
+    monkeypatch.setattr(runner, "evaluate", evaluate)
+    monkeypatch.setattr("sys.argv", ["patchwam", "evaluate", "--config", "eval.yaml",
+                                    "--resume", "evaluation.steps=10"])
+    cli.main()
+    assert captured == {"config": "eval.yaml", "overrides": ["evaluation.steps=10"], "resume": True}

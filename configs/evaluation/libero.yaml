@@ -1,0 +1,25 @@
+policy:
+  training_config: configs/libero.yaml
+  weights: ${oc.env:PATCHWAM_POLICY}
+benchmark:
+  kind: libero
+  suite: libero_spatial
+  task_order_index: 0
+  tasks:
+  - task_id: 0
+  settle_steps: 5
+  settle_action: [0, 0, 0, 0, 0, 0, -1]
+  image_orientation: rotate_180
+  control_hz: 20
+  gripper_convention: raw_pm1
+  binarize_gripper: false
+evaluation:
+  protocol: smoke
+  output_dir: runs/evaluation/libero
+  episodes_per_task: 1
+  max_steps: 300
+  seed: 42
+  horizon: 16
+  steps: 10
+  replan_horizon: 16
+  guidance_scale: 1

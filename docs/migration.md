@@ -13,6 +13,8 @@ This file distinguishes prepared code from verified reproduction results.
 | VLM and causal histories | Independent Qwen3-VL, pooled histories, language LoRA and subtask path; CPU checks passed, real checkpoint parity unverified |
 | CFG and EMA | Explicit conditioning dropout/guidance and successful-update averaging; CPU checks passed |
 | Self-Flow | Three independent source-checked experiment ports; CPU checks passed, real-weight/GPU parity unverified |
+| Closed-loop adapters | Independent RoboCasa, RobotWin, and LIBERO adapters; CPU interface/action/history tests passed, real simulator scores unverified |
+| Full-model validation workflow | Short selected-model training and complete-state resume command; single/two-process CPU checks passed, 4B GPU run unverified |
 | Real-data GPU forward and backward | Unverified |
 | Paired fixed-seed closed-loop parity | Unverified |
 | Alternate backbones and expert variants | Pending independent implementation |
@@ -80,3 +82,10 @@ were checked against archived H800 source recipes, including the 25% withheld-la
 variant with a 10,000-update label warmup and eight-step teacher solver. Their ports
 preserve explicit protocol settings rather than enabling the features in every baseline.
 The main shared-noise configuration retains its previous defaults.
+
+[`evaluation.md`](evaluation.md) documents the new benchmark runners, action/layout
+contracts, per-episode history reset, evaluation resume, and selected-model
+training validation. Two-process CPU validation in separate baseline/resume
+launches reached the same weights exactly. Real 4B CUDA and simulator scores
+remain unverified; interface tests do not establish those results.
+The final CPU regression suite passes 217 tests, with one CUDA-only test skipped.

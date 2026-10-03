@@ -18,7 +18,35 @@ def main():
     smoke = commands.add_parser("smoke", help="Run a small CPU optimization with a tiny backbone")
     smoke.add_argument("--output", default="runs/smoke")
     smoke.add_argument("--updates", type=int, default=2)
+    evaluate = commands.add_parser("evaluate", help="Run a closed-loop benchmark")
+    evaluate.add_argument("--config", required=True)
+    evaluate.add_argument("--resume", action="store_true")
+    evaluate.add_argument("overrides", nargs="*")
+    validate = commands.add_parser("validate", help="Train and verify complete-state resume")
+    validate.add_argument("--config", required=True)
+    validate.add_argument("--output", required=True)
+    validate.add_argument("--updates", type=int, default=2)
+    validate.add_argument("--num-processes", type=int, default=1)
+    validate.add_argument("--allow-cpu", action="store_true")
+    validate.add_argument("--atol", type=float, default=0)
+    validate.add_argument("--rtol", type=float, default=0)
+    validate.add_argument("overrides", nargs="*")
     args = parser.parse_args()
+
+    if args.command == "evaluate":
+        from .evaluation.runner import evaluate
+        report = evaluate(args.config, args.overrides, resume=args.resume)
+        print(json.dumps(report["summary"]))
+        return
+    if args.command == "validate":
+        from .validation import validate_training
+        report = validate_training(
+            args.config, args.overrides, output=args.output, updates=args.updates,
+            num_processes=args.num_processes, allow_cpu=args.allow_cpu,
+            atol=args.atol, rtol=args.rtol,
+        )
+        print(json.dumps(report))
+        return
 
     from .engine import OptimizationRun, RunSettings
     if args.command == "train":

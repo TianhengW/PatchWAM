@@ -1,0 +1,23 @@
+policy:
+  training_config: configs/robocasa.yaml
+  weights: ${oc.env:PATCHWAM_POLICY}
+benchmark:
+  kind: robocasa
+  api: gym
+  tasks:
+  - task: ${oc.env:PATCHWAM_ROBOCASA_TASK}
+  action_layout: human300
+  state_layout: human300
+  control_hz: 20
+  image_orientation: identity
+  env_kwargs: {}
+evaluation:
+  protocol: smoke
+  output_dir: runs/evaluation/robocasa
+  episodes_per_task: 1
+  max_steps: 300
+  seed: 42
+  horizon: 16
+  steps: 10
+  replan_horizon: 16
+  guidance_scale: 1

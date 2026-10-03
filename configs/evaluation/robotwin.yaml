@@ -1,0 +1,23 @@
+policy:
+  training_config: configs/robotwin.yaml
+  weights: ${oc.env:PATCHWAM_POLICY}
+benchmark:
+  kind: robotwin
+  root: ${oc.env:PATCHWAM_ROBOTWIN_ROOT}
+  tasks:
+  - task_name: ${oc.env:PATCHWAM_ROBOTWIN_TASK}
+    task_config: ${oc.env:PATCHWAM_ROBOTWIN_TASK_CONFIG}
+  instruction: ${oc.env:PATCHWAM_INSTRUCTION}
+  action_type: qpos
+  control_hz: 50
+  expert_check: false
+evaluation:
+  protocol: smoke
+  output_dir: runs/evaluation/robotwin
+  episodes_per_task: 1
+  max_steps: 300
+  seed: 42
+  horizon: 16
+  steps: 10
+  replan_horizon: 16
+  guidance_scale: 1

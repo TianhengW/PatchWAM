@@ -40,8 +40,11 @@ class RunSettings:
     drop_last: bool = True
     ema_decay: float | None = None
     ema_warmup_updates: int = 0
+    deterministic: bool = False
 
     def validate(self):
+        if type(self.deterministic) is not bool:
+            raise ValueError("deterministic must be a boolean")
         for key in ("epochs", "batch_size", "accumulation", "checkpoint_every", "log_every"):
             if getattr(self, key) < 1:
                 raise ValueError(f"{key} must be positive")
@@ -108,6 +111,14 @@ class OptimizationRun:
     def __init__(self, model, dataset, settings: RunSettings):
         settings.validate()
         self.settings = settings
+        torch.use_deterministic_algorithms(settings.deterministic)
+        if settings.deterministic:
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cuda.enable_flash_sdp(False)
+            torch.backends.cuda.enable_mem_efficient_sdp(False)
+            torch.backends.cuda.enable_cudnn_sdp(False)
+            torch.backends.cuda.enable_math_sdp(True)
         random.seed(settings.seed)
         np.random.seed(settings.seed)
         torch.manual_seed(settings.seed)
