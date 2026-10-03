@@ -1,5 +1,10 @@
 # Model assets
 
+Vision-language conditioning, pooled causal histories, CFG, EMA, and the three
+Self-Flow training variants are described in
+[`conditioning_and_training.md`](conditioning_and_training.md). Their CPU checks
+do not establish compatibility with full-size historical checkpoints or benchmark scores.
+
 The FLUX.2 adapter uses the upstream transformer parameter modules with an independently
 implemented joint attention path. Clean conditioning tokens cannot attend to the noisy
 future or action tokens. The upstream default attention path is not interchangeable

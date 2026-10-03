@@ -25,7 +25,8 @@ def sequence_coordinates(batch: int, length: int, *, group: float = 0, device=No
 
 def joint_visibility(
     text_length: int, reference_length: int, future_length: int, horizon: int,
-    *, text_valid: Tensor | None = None, isolate_actions: bool = False, device=None,
+    *, text_valid: Tensor | None = None, reference_valid: Tensor | None = None,
+    isolate_actions: bool = False, device=None,
 ) -> Tensor:
     """Return SDPA visibility: True means query may attend to key.
 
@@ -43,12 +44,20 @@ def joint_visibility(
         action_start = prefix + future_length
         allowed[prefix:action_start, action_start:] = False
         allowed[action_start:, prefix:action_start] = False
-    if text_valid is None:
+    if text_valid is None and reference_valid is None:
         return allowed[None, None]
-    if text_valid.ndim != 2 or text_valid.shape[1] != text_length:
+    if text_valid is not None and (text_valid.ndim != 2 or text_valid.shape[1] != text_length):
         raise ValueError("text_valid must have shape [batch, text_length]")
-    allowed = allowed[None, None].expand(text_valid.shape[0], 1, total, total).clone()
-    allowed[..., :text_length] &= text_valid[:, None, None].to(device=allowed.device, dtype=torch.bool)
+    if reference_valid is not None and (reference_valid.ndim != 2 or reference_valid.shape[1] != reference_length):
+        raise ValueError("reference_valid must have shape [batch, reference_length]")
+    batch = (text_valid if text_valid is not None else reference_valid).shape[0]
+    if text_valid is not None and reference_valid is not None and text_valid.shape[0] != reference_valid.shape[0]:
+        raise ValueError("Text and reference valid-mask batch sizes differ")
+    allowed = allowed[None, None].expand(batch, 1, total, total).clone()
+    if text_valid is not None:
+        allowed[..., :text_length] &= text_valid[:, None, None].to(device=allowed.device, dtype=torch.bool)
+    if reference_valid is not None:
+        allowed[..., text_length:prefix] &= reference_valid[:, None, None].to(device=allowed.device, dtype=torch.bool)
     return allowed
 
 

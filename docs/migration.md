@@ -10,6 +10,9 @@ This file distinguishes prepared code from verified reproduction results.
 | Data processing provenance and licensing | Complete per-file manifest, MIT notices, normalization/augmentation oracle checks |
 | H800 / Digua training sources | 10 read-only snapshots, 5952 text files; all SHA256 verified; legacy recipes ported |
 | Native policy initialization | Strict safetensors parameter-name and shape validation |
+| VLM and causal histories | Independent Qwen3-VL, pooled histories, language LoRA and subtask path; CPU checks passed, real checkpoint parity unverified |
+| CFG and EMA | Explicit conditioning dropout/guidance and successful-update averaging; CPU checks passed |
+| Self-Flow | Three independent source-checked experiment ports; CPU checks passed, real-weight/GPU parity unverified |
 | Real-data GPU forward and backward | Unverified |
 | Paired fixed-seed closed-loop parity | Unverified |
 | Alternate backbones and expert variants | Pending independent implementation |
@@ -48,17 +51,32 @@ failure propagation. CPU CI installs the optional text-encoding dependencies and
 official micro-layer tests against the pinned source revision rather than skipping them.
 The local asset factory also has a full CPU test using miniature transformer/autoencoder
 weights and a 28-layer text encoder, including raw-image training and action sampling.
+The feature audit passes 131 CPU tests, with one CUDA-only test awaiting a GPU.
+It includes an actual miniature Qwen3-VL language model combined with three camera
+views, causal history, Self-Flow pseudo-label warmup, LoRA, and EMA; interrupted
+training resumes with bitwise-identical live, adapter, and averaged weights.
+Each Self-Flow variant also completed a two-update CLI smoke run. A separate
+two-process CPU run verified exact EMA/adapter resume over four updates.
 Resume signatures include frozen asset and source identities. Large model weights,
 videos, and text-cache files use path/size/modification-time metadata; small model config
 and source files also have content hashes. Complete large payloads are not hashed.
 
 Current numerical and interface differences requiring GPU parity review:
 
-- The flow weight normalizer uses continuous midpoint integration; historical code uses a
-  1000-point endpoint grid. These produce a small normalization difference.
+- Ordinary recipes retain continuous midpoint flow-weight normalization. The matched
+  control and Self-Flow recipes select the historical 1000-point endpoint grid;
+  its values match the archived source oracle exactly on 4,097 sampled timesteps.
 - Action-dimension padding is explicitly expanded into patch coordinates; historical
   versions varied in whether codec fill coordinates were excluded.
-- The raw asset wrapper consumes current/future images. History and VL reasoning variants
-  still need independent online implementations.
+- The raw asset wrapper accepts separate current/future views and masked pooled history.
+  The VL encoder accepts unaugmented current/past observations; its original full-size
+  history/LoRA checkpoint and fixed training budget still require matching.
 - LeRobot v3 and heterogeneous canonical-80 data contracts are not supported by this reader.
 - Shared-filesystem multi-node GPU checkpointing and real benchmark evaluation remain unverified.
+
+Optional model and training features are described in
+[`conditioning_and_training.md`](conditioning_and_training.md). Self-Flow configurations
+were checked against archived H800 source recipes, including the 25% withheld-label
+variant with a 10,000-update label warmup and eight-step teacher solver. Their ports
+preserve explicit protocol settings rather than enabling the features in every baseline.
+The main shared-noise configuration retains its previous defaults.

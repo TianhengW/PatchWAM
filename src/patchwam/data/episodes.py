@@ -27,7 +27,8 @@ from torch.utils.data import Dataset
 
 from .appearance import AppearanceRandomizer
 from .augmentation import ClipAugment
-from .cameras import compose_cameras
+from .cameras import compose_cameras, prepare_rgb, resize_clip
+from .history import PastFrameSelector
 from .processing import SampleProcessor
 from .scaling import read_statistics
 
@@ -83,7 +84,12 @@ class EpisodeDataset(Dataset):
                  require_text_cache=False, text_embedding_cache_dir=None, context_len=128,
                  qwen_text_cache_dir=None, qwen_context_len=128, qwen_text_cache_format="qwen2_5_vl",
                  override_instruction=None, prompt_template="A video recorded from a robot's point of view executing the following instruction: {task}",
-                 lerobot_backend="v2", lerobot_tolerance_s=None, video_augmentation=None):
+                 lerobot_backend="v2", lerobot_tolerance_s=None, video_augmentation=None,
+                 separate_camera_views=False, include_vl_inputs=False, history_slots=0,
+                 history_interval_s=1.0, history_jitter_s=0.4, history_whole_dropout=0.2,
+                 history_slot_dropout=0.2, history_truncate=True, vl_history_jitter_frames=1,
+                 vl_image_size=448, head_camera_key=None, subtask_column=None,
+                 require_subtask_labels=False):
         if lerobot_backend != "v2":
             raise ValueError("EpisodeDataset currently supports local LeRobot v2; v3 merged video files require a separate backend")
         if num_frames < 2 or global_sample_stride < 1 or sample_index_stride < 1:
@@ -95,6 +101,23 @@ class EpisodeDataset(Dataset):
         if not dataset_dirs:
             raise ValueError("At least one local dataset root is required")
         self.shape_meta = shape_meta
+        self.training = bool(is_training_set)
+        self.separate_camera_views = bool(separate_camera_views)
+        self.include_vl_inputs = bool(include_vl_inputs or separate_camera_views or history_slots)
+        self.vl_image_size = int(vl_image_size)
+        if self.vl_image_size < 1:
+            raise ValueError("VL image size must be positive")
+        self.head_camera_key = head_camera_key or shape_meta["images"][0]["key"]
+        if self.head_camera_key not in {item["key"] for item in shape_meta["images"]}:
+            raise ValueError("The history head camera is missing from shape metadata")
+        self.history_selector = PastFrameSelector(
+            slots=history_slots, interval_s=history_interval_s, jitter_s=history_jitter_s,
+            whole_dropout=history_whole_dropout, slot_dropout=history_slot_dropout,
+            truncate_recent=history_truncate, vl_jitter_frames=vl_history_jitter_frames,
+        )
+        self.subtask_column, self.require_subtask_labels = subtask_column, bool(require_subtask_labels)
+        if self.require_subtask_labels and not self.subtask_column:
+            raise ValueError("Required subtask supervision needs an explicit parquet column")
         self.num_frames = int(num_frames)
         self.horizon = self.num_frames - 1
         self.frame_stride = int(global_sample_stride)
@@ -163,6 +186,8 @@ class EpisodeDataset(Dataset):
                 template = info.get("data_path", "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet")
                 path = root / template.format(episode_chunk=index // chunk_size, episode_index=index)
                 parquet = pq.ParquetFile(path)
+                if self.require_subtask_labels and self.subtask_column not in parquet.schema_arrow.names:
+                    raise KeyError(f"Missing required subtask labels {self.subtask_column!r}: {path}")
                 length = parquet.metadata.num_rows
                 if "timestamp" in parquet.schema_arrow.names:
                     times = np.asarray(parquet.read(columns=["timestamp"])["timestamp"].to_pylist(), dtype=np.float64)
@@ -244,6 +269,10 @@ class EpisodeDataset(Dataset):
             "text_cache": self.text_cache, "require_text_cache": self.require_text_cache, "context_len": self.context_len,
             "qwen_cache": self.qwen_cache, "qwen_context_len": self.qwen_context_len, "qwen_format": self.qwen_format,
             "video_tolerance": self.video_tolerance, "augmentation": vars(self.video_augmentation) if self.video_augmentation else None,
+            "history": vars(self.history_selector), "separate_camera_views": self.separate_camera_views,
+            "include_vl_inputs": self.include_vl_inputs, "vl_image_size": self.vl_image_size,
+            "head_camera_key": self.head_camera_key, "subtask_column": self.subtask_column,
+            "require_subtask_labels": self.require_subtask_labels,
         }
         return sha256(json.dumps(canonical(payload), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -351,8 +380,54 @@ class EpisodeDataset(Dataset):
             sample["embodiment"] = str(sample["embodiment"])
         result = self.processor.preprocess(sample)
         cameras = result.pop("images")
+        history_clips = []
+        if self.include_vl_inputs:
+            head = next(item for item in self.shape_meta["images"] if item["key"] == self.head_camera_key)
+            clean_current = prepare_rgb(sample["images"][self.head_camera_key][:1])
+            result["vl_current"] = resize_clip(clean_current, (self.vl_image_size,) * 2)[0] * 2 - 1
+            current_row = int(episode.rows[start])
+            fps = float(episode.info["fps"])
+            for vision_language in (False, True):
+                rows, valid = self.history_selector.select(
+                    current_row, fps, training=self.training, vision_language=vision_language,
+                )
+                if len(rows):
+                    frames = prepare_rgb(self._video_frames(episode, _column_name(head, "images"), rows, table))
+                else:
+                    frames = clean_current.new_empty((0, *clean_current.shape[1:]))
+                if vision_language:
+                    if len(rows):
+                        frames = resize_clip(frames, (self.vl_image_size,) * 2)
+                    else:
+                        frames = clean_current.new_empty((0, 3, self.vl_image_size, self.vl_image_size))
+                    result["vl_history"] = (frames * 2 - 1).masked_fill(~valid[:, None, None, None], 0)
+                    result["vl_history_valid"] = valid
+                else:
+                    if len(rows):
+                        frames = resize_clip(frames, head["shape"][-2:])
+                    result["history_valid"] = valid
+                    history_clips = [frame.unsqueeze(0) for frame in frames]
         if self.video_augmentation is not None:
-            cameras = self.video_augmentation(cameras)
+            augmented = self.video_augmentation(cameras + history_clips)
+            cameras, history_clips = augmented[:len(cameras)], augmented[len(cameras):]
+        if self.separate_camera_views:
+            if len({tuple(camera.shape) for camera in cameras}) != 1:
+                raise ValueError("Separate camera views require equal temporal and image shapes")
+            result["camera_video"] = torch.stack([(camera * 2 - 1).permute(1, 0, 2, 3) for camera in cameras])
+        if self.include_vl_inputs:
+            if history_clips:
+                history = torch.cat(history_clips, 0) * 2 - 1
+            else:
+                history = cameras[0].new_empty((0, 3, *cameras[0].shape[-2:]))
+            result["history_video"] = history.masked_fill(~result["history_valid"][:, None, None, None], 0)
+        if self.subtask_column is not None:
+            label = table[self.subtask_column][int(episode.rows[start])].as_py() if self.subtask_column in table.column_names else None
+            if self.require_subtask_labels and (not isinstance(label, str) or not label.strip()):
+                raise ValueError(f"Invalid subtask label at row {episode.rows[start]}: {episode.path}")
+            if label is not None:
+                if not isinstance(label, str):
+                    raise ValueError("Subtask labels must be sentence strings")
+                result["subtask"] = label
         result["video"] = compose_cameras(cameras, self.layout, self.video_size, self.robotwin_layout)
         result["proprio"] = result["proprio"][:-1]
         result["proprio_is_pad"] = result["proprio_is_pad"][:-1]

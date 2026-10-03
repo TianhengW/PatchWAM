@@ -1,5 +1,10 @@
 # Data setup
 
+The optional RoboDojo recipe uses separate camera views, causal past-frame slots,
+unaugmented VL inputs, and per-row subtask sentence labels. Slot selection and the
+episode-local online buffer are independent Apache-2.0 implementations. See
+[`conditioning_and_training.md`](conditioning_and_training.md) for the input contract.
+
 Use local LeRobot v2 datasets with episode tables under `data/`, camera videos under
 `videos/`, and metadata under `meta/`. Configure dataset roots explicitly; this repository
 does not download or include research data.

@@ -40,7 +40,8 @@ class ConditionalTokenBlock(nn.Module):
         self.ff = nn.Sequential(nn.Linear(width, width * 4), nn.GELU(), nn.Linear(width * 4, width))
 
     def forward(self, states: Tensor, time: Tensor, coordinates: Tensor, visible: Tensor) -> Tensor:
-        offset, scale, gate = self.modulation(F.silu(time)).unsqueeze(1).chunk(3, -1)
+        modulation = self.modulation(F.silu(time))
+        offset, scale, gate = (modulation.unsqueeze(1) if time.ndim == 2 else modulation).chunk(3, -1)
         modulated = self.norm(states) * (1 + scale) + offset
         qkv = self.qkv(modulated).unflatten(-1, (3, self.heads, -1))
         query, key, value = qkv.permute(2, 0, 3, 1, 4).unbind(0)
@@ -57,6 +58,7 @@ class SmallJointTransformer(nn.Module):
         if width % (heads * 8) != 0 or depth < 1:
             raise ValueError("width / heads must be divisible by eight, and depth positive")
         self.token_dim, self.text_dim = token_dim, text_dim
+        self.representation_dim, self.representation_layers = width, depth
         self.token_input = nn.Linear(token_dim, width, bias=False)
         self.text_input = nn.Linear(text_dim, width, bias=False)
         self.time_input = nn.Sequential(nn.Linear(64, width), nn.SiLU(), nn.Linear(width, width))
@@ -67,13 +69,24 @@ class SmallJointTransformer(nn.Module):
     def forward(
         self, reference: Tensor, noisy: Tensor, sigma: Tensor, context: Tensor,
         *, reference_ids: Tensor, noisy_ids: Tensor, context_ids: Tensor, visibility: Tensor,
-    ) -> Tensor:
+        token_sigma: Tensor | None = None, representation_layer: int | None = None,
+    ) -> Tensor | tuple[Tensor, Tensor]:
+        if representation_layer is not None and not 1 <= representation_layer <= self.representation_layers:
+            raise ValueError("representation_layer must be a 1-based transformer layer")
         text_length, reference_length = context.shape[1], reference.shape[1]
         states = torch.cat((self.text_input(context), self.token_input(torch.cat((reference, noisy), 1))), 1)
         coordinates = torch.cat((context_ids, reference_ids, noisy_ids), 1)
         frequencies = torch.exp(-math.log(10000) * torch.arange(32, device=sigma.device).float() / 32)
-        angles = sigma.float()[:, None] * 1000 * frequencies
+        if token_sigma is not None:
+            if token_sigma.shape != noisy.shape[:2]:
+                raise ValueError("token_sigma must match the noisy token shape [B,N]")
+            sigma = torch.cat((sigma[:, None].expand(-1, text_length + reference_length), token_sigma), 1)
+        angles = sigma.float()[..., None] * 1000 * frequencies
         time = self.time_input(torch.cat((angles.cos(), angles.sin()), -1).to(states))
-        for block in self.blocks:
+        features = None
+        for index, block in enumerate(self.blocks, 1):
             states = block(states, time, coordinates, visibility)
-        return self.token_output(self.output_norm(states[:, text_length + reference_length:]))
+            if index == representation_layer:
+                features = states[:, text_length + reference_length:]
+        velocity = self.token_output(self.output_norm(states[:, text_length + reference_length:]))
+        return velocity if representation_layer is None else (velocity, features)

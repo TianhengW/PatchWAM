@@ -3,6 +3,11 @@
 These development configurations describe the intended training contracts.
 Full-size GPU execution and closed-loop reproduction remain unverified.
 
+Additional matched controls, VLM/history recipes, and three source-checked Self-Flow
+variants are described in [`conditioning_and_training.md`](conditioning_and_training.md).
+CFG and EMA are explicit training/inference options; they are not automatically
+enabled in the ordinary benchmark configurations.
+
 | Configuration | Action / state dimensions | Camera layout | Normalization | Global batch |
 | --- | --- | --- | --- | --- |
 | `configs/robotwin.yaml` | 14 / 14 | High view above both wrist views, 288x256 | Z-score | 256: 32 processes x batch 4 x accumulation 2 |

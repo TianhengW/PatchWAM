@@ -87,7 +87,7 @@
         }
       ],
       "license_notice": "LICENSE-MIT",
-      "modifications": "Independent local read-only LeRobot v2 reader; source reviewed for time offsets, endpoint windows, split/filter and statistics behavior. Does not copy vendored LeRobot code. Raises on corrupt samples instead of silently replacing them; supports embedded images and PyAV videos; v3 is explicitly unsupported. Follow-up integrity audit aligns proprio time masks with the cropped horizon, emits native text_tokens/text_valid for compatible Qwen3 caches, validates FPS/timestamp cadence, and restores a strict configurable 1e-4 second video timestamp tolerance. Automatically fitted homogeneous statistics preserve equal-episode/per-step variance aggregation and the per-step quantile envelope. Named-embodiment automatic fitting retains the flattened global quantile/variance recipe separately; numeric embodiment identifiers are normalized to strings to match JSON statistics keys. Cache format metadata lets native policies reject incompatible cached embeddings. Resume fingerprints now include retained video files and configured .pt cache files by path, byte size and modification time; no full media/cache payload hashing is performed. Parquet read-cache keys also include byte size and modification time, preventing reopened datasets from reading stale tables after local replacement."
+      "modifications": "Independent local read-only LeRobot v2 reader; source reviewed for time offsets, endpoint windows, split/filter and statistics behavior. Does not copy vendored LeRobot code. Raises on corrupt samples instead of silently replacing them; supports embedded images and PyAV videos; v3 is explicitly unsupported. Follow-up integrity audit aligns proprio time masks with the cropped horizon, emits native text_tokens/text_valid for compatible Qwen3 caches, validates FPS/timestamp cadence, and restores a strict configurable 1e-4 second video timestamp tolerance. Automatically fitted homogeneous statistics preserve equal-episode/per-step variance aggregation and the per-step quantile envelope. Named-embodiment automatic fitting retains the flattened global quantile/variance recipe separately; numeric embodiment identifiers are normalized to strings to match JSON statistics keys. Cache format metadata lets native policies reject incompatible cached embeddings. Resume fingerprints now include retained video files and configured .pt cache files by path, byte size and modification time; no full media/cache payload hashing is performed. Parquet read-cache keys also include byte size and modification time, preventing reopened datasets from reading stale tables after local replacement. Independent extension adds separate-camera tensors, unaugmented current/past vision-language observations, masked causal history on the original episode clock, and required subtask sentence validation; these new selection settings and labels enter continuation fingerprints."
     },
     {
       "file": "augmentation.py",
@@ -144,6 +144,13 @@
       "license_notice": "LICENSE-MIT",
       "modifications": "Consolidated data appearance stages into a new AppearanceRandomizer API with metadata-only configuration state. Preserves canonical C2R-DR4 p=0.8 photometric->AdaIN->Fourier operation order, parameters, random draws and temporal consistency. Accepts camera lists or CHW/TCHW/camera-TCHW tensors. Validates unknown parameters and explicitly rejects enabled background replacement; no mask assets, SAM, background bank, geometric augmentation, or runtime framework was copied.",
       "recipe": "repro/configs/c2r_dr4_resolved.yaml in the hash-locked source archive"
+    },
+    {
+      "file": "history.py",
+      "status": "independent_new_implementation",
+      "license": "Apache-2.0",
+      "sources": [],
+      "modifications": "New causal past-frame slot selection and explicit episode-local observation buffer. Original episode-clock selection, separate world-model/VL timing and dropout, pre-episode validity masks, and automatic reset on episode identity changes. No upstream implementation was copied."
     }
   ],
   "third_party_review": {

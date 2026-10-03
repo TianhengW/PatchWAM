@@ -21,6 +21,7 @@ See the [implementation and verification record](docs/migration.md) for current 
 - [Model assets](#model-assets)
 - [Dataset preparation](#dataset-preparation)
 - [Training configurations](#training-configurations)
+- [Optional conditioning and training](#optional-conditioning-and-training)
 - [Training](#training)
 - [Checkpoints and continuation](#checkpoints-and-continuation)
 - [Action sampling](#action-sampling)
@@ -61,8 +62,9 @@ The prefix cannot attend to noisy future or action tokens. Generated tokens can
 attend to the prefix and to each other. The FLUX.2 adapter implements this attention
 contract while retaining the official transformer's parameter structure.
 
-The autoencoder and text encoder remain frozen. The denoising transformer and
-proprioception projection are trained. Action sampling follows a descending
+The autoencoder and base text-encoder weights remain frozen. The denoising transformer,
+proprioception projection, and optional RoboDojo VL LoRA adapters are trained.
+Action sampling follows a descending
 Euler flow schedule and returns normalized actions together with future latent tokens.
 
 ## Installation
@@ -89,6 +91,13 @@ To train with the FLUX.2 backbone, also install the text-encoding dependencies:
 
 ```bash
 uv pip install -e '.[flux]'
+```
+
+Vision-language configurations additionally use `.[vlm]`, with Transformers 4.57.1
+for the official Qwen3-VL modules:
+
+```bash
+uv pip install -e '.[flux,vlm]'
 ```
 
 With standard Python tooling, the equivalent setup is:
@@ -146,6 +155,7 @@ The benchmark configurations use `FluxAssetPolicy.from_local_assets` with the
 | `PATCHWAM_TRANSFORMER` | FLUX.2 Klein Base 4B transformer safetensors file |
 | `PATCHWAM_AUTOENCODER` | FLUX.2 autoencoder safetensors file |
 | `PATCHWAM_TEXT_ENCODER` | Local Qwen3-4B Hugging Face model directory, including weights and tokenizer files |
+| `PATCHWAM_VLM` | Optional local Qwen3-VL-4B-Instruct directory for VL configurations |
 
 The adapter is checked against official source revision
 `50fe5162777813d869182b139e83b10743caef15`. From the PatchWAM directory:
@@ -326,6 +336,31 @@ training CLI does not run a validation loop automatically.
 For recipe-specific filtering, augmentation, and evaluation-protocol metadata,
 see [training recipes](docs/training_recipes.md).
 
+## Optional conditioning and training
+
+VLM, history, CFG, EMA, and Self-Flow are implemented as explicit options. Use the
+configuration belonging to the experiment being reproduced; enabling all options
+together changes the method. The paper's evaluations use 10 solver steps and no CFG.
+
+| Feature | Configuration or API | Behavior |
+| --- | --- | --- |
+| Frozen current-image VLM | [robotwin_vlm.yaml](configs/robotwin_vlm.yaml) | Qwen3-VL reads the current head-camera image and instruction. |
+| VLM and world-model history | [robodojo_vlm_history.yaml](configs/robodojo_vlm_history.yaml) | Separate camera views, 20 causal past slots, pooled features, language LoRA, and subtask supervision. |
+| CFG | `model.condition_dropout`; sampling `guidance_scale`, `action_guidance_scale` | Drop language during training; combine conditional and language-free velocities during sampling. Default scale 1 disables guidance. |
+| EMA | `training.ema_decay`, `training.ema_warmup_updates` | Average successful optimizer updates, restore the average with training state, and export `ema_policy.safetensors`. |
+| Self-Flow | [variant 1](configs/robotwin_self_flow_v1.yaml), [variant 2](configs/robotwin_self_flow_v2.yaml), [variant 3](configs/robotwin_self_flow_v3.yaml) | Dual timesteps and an EMA representation teacher, with modality masks and action pseudo-labels in the later variants. |
+
+The Self-Flow recipes and their [matched control](configs/robotwin_matched.yaml) use
+one of every 20 window starts, 10 epochs, and global batch 64 on eight GPUs. They
+have different EMA decay, masking, and label-supervision settings from ordinary
+full-data training. The RoboDojo VL/history configuration requires annotated
+subtask sentences and an explicitly supplied original fixed training budget.
+
+See [conditioning and training options](docs/conditioning_and_training.md) for
+input contracts, LoRA and pooling settings, online history reset, guidance commands,
+EMA weight selection, memory cost, and the three Self-Flow protocols.
+These implementation checks do not establish full-size GPU or closed-loop parity.
+
 ## Training
 
 ### Configuration overrides
@@ -438,6 +473,9 @@ The scheduler is registered as custom checkpoint state. Additional ranks have
 their own RNG-state files; mixed-precision scaler files may also be present.
 The tiny model uses `model.safetensors` instead of `policy_0.safetensors`.
 Frozen encoder weights are kept in the original model-asset locations.
+With trained VL adapters, the native policy checkpoint also includes their weights.
+EMA-enabled runs additionally save `ema_policy.safetensors` and registered averaging
+state; select the EMA file explicitly when loading inference weights.
 
 Checkpoints are written to a temporary pending directory and published after
 state saving finishes. A complete checkpoint has `cursor.json`. Existing checkpoint
@@ -557,8 +595,8 @@ restoring their raster layout and applying the autoencoder decoder.
 The C2R configuration's `inference` section records a 10-step solver and a 16-action
 replanning horizon. A caller must explicitly pass `steps=10` and implement that
 controller schedule; the training CLI does not consume the evaluation settings.
-Closed-loop adapters, history/VL reasoning paths, expert variants, and other
-backbone implementations remain pending.
+VL and causal-history input preparation are available in the optional configurations.
+Closed-loop adapters, expert variants, and other backbone implementations remain pending.
 
 ## Verification and troubleshooting
 
@@ -607,15 +645,18 @@ src/patchwam/
 ├── configuration.py         YAML construction and process-device binding
 ├── engine.py                Distributed optimization, metrics, and continuation
 ├── checkpoints.py           Native weights and compact policy state
+├── averaging.py             Successful-update EMA and detached teacher execution
 ├── models/
 │   ├── codec.py             Fixed action-patch representation
 │   ├── flow.py              Shifted flow training and sampling schedule
 │   ├── geometry.py          Token coordinates and attention visibility
 │   ├── policy.py            Joint objective and action sampling
 │   ├── flux.py              Official model adapter and local frozen encoders
+│   ├── vision_language.py   Causal Qwen3-VL features, language LoRA, and subtask loss
 │   └── tiny.py              Small transformer for CPU checks
 └── data/
     ├── episodes.py          LeRobot v2 windows, filters, caches, and fingerprints
+    ├── history.py           Independent causal slot selection and episode-local buffer
     ├── processing.py        Action/state transforms and feature assembly
     ├── scaling.py           Feature normalization and inverse transforms
     ├── cameras.py           RGB preparation and multi-camera composition

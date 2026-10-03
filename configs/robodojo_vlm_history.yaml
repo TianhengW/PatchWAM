@@ -1,0 +1,162 @@
+# Manuscript-grounded VL/history port; supply original fixed update budget and subtask labels; parity unverified.
+model:
+  _target_: patchwam.models.FluxAssetPolicy.from_local_assets
+  transformer_path: ${oc.env:PATCHWAM_TRANSFORMER}
+  autoencoder_path: ${oc.env:PATCHWAM_AUTOENCODER}
+  text_encoder_path: ${oc.env:PATCHWAM_VLM}
+  flux_source: ${oc.env:FLUX2_SRC}
+  action_dim: ${data.processor.action_output_dim}
+  proprio_dim: ${data.processor.proprio_output_dim}
+  variant: klein-base-4b
+  dtype: bfloat16
+  device: cuda
+  context_length: 128
+  shift: 5.0
+  video_weight: 0.5
+  action_weight: 1.0
+  action_scale: 1.0
+  gradient_checkpointing: true
+  text_encoder_kind: qwen3_vl
+  vl_trainable_adapters: true
+  vl_lora_rank: 64
+  vl_lora_alpha: 128
+  vl_lora_dropout: 0.05
+  vl_instruction_layers:
+  - 9
+  - 18
+  - 27
+  vl_summary_layers:
+  - 18
+  - 27
+  - 36
+  vl_history_pool_size: 4
+  vl_image_size: 448
+  vl_auxiliary_weight: 0.1
+  vl_label_smoothing: 0.1
+  vl_require_subtasks: true
+  history_pool_size: 4
+data:
+  _target_: patchwam.data.EpisodeDataset
+  dataset_dirs:
+  - ${oc.env:PATCHWAM_DATA_ROOT}
+  num_frames: 17
+  endpoint_frames_only: true
+  action_video_freq_ratio: 1
+  global_sample_stride: 1
+  sample_index_stride: 1
+  video_size:
+  - 288
+  - 256
+  concat_multi_camera: robotwin
+  robotwin_camera_layout: compact_288x256
+  val_set_proportion: 0.01
+  is_training_set: true
+  pretrained_norm_stats: ${oc.env:PATCHWAM_NORM_STATS}
+  nonidle_filter_path: null
+  shape_meta:
+    images:
+    - key: cam_high
+      raw_shape:
+      - 3
+      - 480
+      - 640
+      shape:
+      - 3
+      - 256
+      - 256
+    - key: cam_left_wrist
+      raw_shape:
+      - 3
+      - 480
+      - 640
+      shape:
+      - 3
+      - 256
+      - 256
+    - key: cam_right_wrist
+      raw_shape:
+      - 3
+      - 480
+      - 640
+      shape:
+      - 3
+      - 256
+      - 256
+    action:
+    - key: default
+      raw_shape: 14
+      shape: 14
+    state:
+    - key: default
+      raw_shape: 14
+      shape: 14
+  processor:
+    _target_: patchwam.data.SampleProcessor
+    shape_meta: ${data.shape_meta}
+    action_output_dim: 14
+    proprio_output_dim: 14
+    norm_default_mode: z-score
+    use_stepwise_action_norm: false
+  video_augmentation:
+    _target_: patchwam.data.ClipAugment
+    p: 0.5
+    augment_types:
+    - corrupt_only
+    - color_only
+    - both
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.03
+    gamma:
+      range:
+      - 0.9
+      - 1.1
+    gaussian_noise:
+      std: 0.01
+    random_resized_crop:
+      scale:
+      - 0.95
+      - 1.0
+      ratio: preserve
+    rotate:
+      degrees: 5.0
+      fill: mean
+  separate_camera_views: true
+  history_slots: 20
+  history_interval_s: 1.0
+  history_jitter_s: 0.4
+  history_whole_dropout: 0.2
+  history_slot_dropout: 0.2
+  history_truncate: true
+  vl_history_jitter_frames: 1
+  vl_image_size: 448
+  head_camera_key: cam_high
+  subtask_column: subtask
+  require_subtask_labels: true
+training:
+  output_dir: runs/robodojo_vlm_history
+  epochs: 100
+  max_updates: ${oc.decode:${oc.env:PATCHWAM_MAX_UPDATES}}
+  batch_size: 8
+  accumulation: 1
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  precision: bf16
+  workers: 16
+  gradient_clip: 1.0
+  checkpoint_every: 5000
+  log_every: 10
+  seed: 42
+  betas:
+  - 0.9
+  - 0.95
+  warmup_fraction: 0.05
+  minimum_lr_fraction: 0.01
+  global_batch_size: 256
+inference:
+  steps: 10
+  replan_horizon: 8
+  predicted_horizon: 16
+  guidance_scale: 1.0
