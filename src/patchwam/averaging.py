@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Successful-update weight averaging and stateless teacher evaluation."""
+"""EMA weights and stateless teacher evaluation."""
 
 import math
 from contextlib import contextmanager
@@ -8,11 +7,9 @@ import torch
 
 
 class PolicyWeightAverage:
-    """FP32 shadows of trainable weights, including optional encoder adapters.
+    """Average trainable weights in FP32 after a copy-only warmup.
 
-    ``warmup_updates`` copies the current weights during the first N successful
-    updates. Subsequent updates use the fixed decay. Frozen parameters and
-    buffers are read from the live model rather than replicated or averaged.
+    Frozen weights and buffers stay live.
     """
 
     def __init__(self, model, *, decay=0.999, warmup_updates=0):
@@ -96,17 +93,15 @@ class PolicyWeightAverage:
         self.updates = updates
 
     def parameters_for(self, model):
-        """Return detached shadows on each live parameter's device and dtype."""
+        """Match shadows to live parameter devices and dtypes."""
         parameters = self._matching_parameters(model)
         return {name: shadow.detach().to(parameters[name]) for name, shadow in self.shadows.items()}
 
     @torch.no_grad()
     def call(self, model, *args, parameter_prefixes=None, submodule=None, **kwargs):
-        """Evaluate a teacher without replacing live student parameters.
+        """Evaluate EMA without changing live weights, buffers, or training modes.
 
-        This is safe between a student forward and its backward. Buffer state
-        is cloned so even an encoder with mutable buffers cannot alter the live
-        model. Module training flags are restored, including mixed frozen modes.
+        Safe between student forward and backward.
         """
         parameters = self._matching_parameters(model)
         selected = self.shadows
@@ -149,11 +144,7 @@ class PolicyWeightAverage:
 
     @contextmanager
     def apply_to(self, model):
-        """Temporarily use averaged weights for evaluation outside live graphs.
-
-        Use ``call`` for a teacher during training: swapping parameters in this
-        context would invalidate an outstanding student autograd graph.
-        """
+        """Swap in EMA for evaluation; use ``call`` with live autograd graphs."""
         parameters = self._matching_parameters(model)
         original = {name: tensor.detach().clone() for name, tensor in parameters.items()}
         modes = [(module, module.training) for module in model.modules()]
@@ -170,7 +161,7 @@ class PolicyWeightAverage:
                     module.training = training
 
     def native_weights(self, model):
-        """Complete strict-loader weights, retaining unaveraged policy buffers."""
+        """Export EMA weights with live policy buffers."""
         from .checkpoints import checkpoint_parameter_keys, policy_weight_state
 
         parameters = self._matching_parameters(model)

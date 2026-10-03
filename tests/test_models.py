@@ -165,7 +165,7 @@ def test_clean_prefix_does_not_depend_on_generated_tokens():
     model(sample, sigma=torch.tensor([0.6, 0.6]), future_noise=noise, action_noise=action_noise)
     model(sample, sigma=torch.tensor([0.6, 0.6]), future_noise=noise + 100, action_noise=action_noise - 100)
     hook.remove()
-    # Three text + one state + four reference tokens form the closed prefix.
+    # The closed prefix has 3 text, 1 state, and 4 reference tokens.
     torch.testing.assert_close(observed[0][:, :8], observed[1][:, :8], rtol=0, atol=0)
     assert not torch.allclose(observed[0][:, 8:], observed[1][:, 8:])
 

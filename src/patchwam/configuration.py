@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Configuration loading, without process-global resolvers or hidden environment files."""
+"""Load configs with explicit environment settings."""
 
 from pathlib import Path
 
@@ -20,7 +19,7 @@ def construct(specification):
 
 
 def runtime_model_specification(specification, device):
-    """Bind eager CUDA asset loading to the process device, preserving saved config."""
+    """Load CUDA assets on the process device without changing saved config."""
     import torch
 
     bound = OmegaConf.create(OmegaConf.to_container(specification, resolve=True))

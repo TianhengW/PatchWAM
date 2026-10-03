@@ -1,4 +1,4 @@
-# Self-Flow variant 2: source recipe port; GPU/checkpoint/closed-loop parity unverified.
+# Self-Flow v2; GPU parity unverified.
 model:
   _target_: patchwam.models.FluxAssetPolicy.from_local_assets
   transformer_path: ${oc.env:PATCHWAM_TRANSFORMER}

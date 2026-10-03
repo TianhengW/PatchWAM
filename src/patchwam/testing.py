@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Small deterministic tensor examples for local verification without model downloads."""
+"""Deterministic tensor examples for local tests."""
 
 import hashlib
 import json

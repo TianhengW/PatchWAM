@@ -1,4 +1,4 @@
-# Development port: checkpoint and real-data GPU parity remain unverified.
+# Development recipe; GPU parity unverified.
 model:
   _target_: patchwam.models.FluxAssetPolicy.from_local_assets
   transformer_path: ${oc.env:PATCHWAM_TRANSFORMER}

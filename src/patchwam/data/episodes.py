@@ -1,4 +1,4 @@
-"""Local LeRobot v2 episode windows without a vendored training framework.
+"""Local LeRobot v2 episode windows.
 
 The reader is independently implemented against LeRobot's documented on-disk
 format. ImageWAM's data-window and filtering behavior informed its contract;
@@ -66,12 +66,10 @@ def _feature_tensor(table, column, indices):
 
 
 class EpisodeDataset(Dataset):
-    """Return model-ready windows with endpoint images and continuous actions.
+    """Endpoint images and action windows with separate padding masks.
 
-    For 17 frames at ratio 1, images cover t and t+16; actions cover t..t+15.
-    Dimension and time padding are separate boolean masks where True means pad.
-    Corrupt samples raise an error so the training denominator cannot silently
-    change through random replacement.
+    At 17 frames and ratio 1, images are t/t+16 and actions are t..t+15.
+    True marks invalid dimensions or steps. Corrupt samples raise.
     """
 
     def __init__(self, dataset_dirs, shape_meta, num_frames=17, video_size=(224, 448),
@@ -220,11 +218,10 @@ class EpisodeDataset(Dataset):
         self.fingerprint = self._fingerprint()
 
     def _fingerprint(self):
-        """Hash metadata, statistics and the concrete sample-selection contract.
+        """Hash metadata, statistics, selection, and media/cache file metadata.
 
-        Media/cache payloads are represented by paths, sizes and modification
-        times, while metadata and statistics are hashed by actual content.
-        External files referenced inside embedded-image columns are excluded.
+        Media/cache files use path, size, and mtime; full payloads and paths
+        embedded in image columns are excluded.
         """
         def canonical(value):
             if isinstance(value, Path):

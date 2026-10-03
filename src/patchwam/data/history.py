@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Causal frame selection and episode-local online observation storage."""
+"""Causal history sampling and episode-local storage."""
 
 import math
 from collections import deque
@@ -11,10 +10,9 @@ import torch
 
 @dataclass(frozen=True)
 class PastFrameSelector:
-    """Slots are ordered from one interval ago to ``slots`` intervals ago.
+    """Past slots, nearest first, on the original episode clock.
 
-    Frame indices refer to the original episode clock, never a filtered sample
-    index. World-model dropout is independent of the undropped VL history.
+    World-model dropout does not affect VL history.
     """
 
     slots: int = 20
@@ -46,7 +44,7 @@ class PastFrameSelector:
                 centers = centers + np.random.randint(-self.vl_jitter_frames, self.vl_jitter_frames + 1, self.slots)
             else:
                 centers = centers + np.random.uniform(-self.jitter_s, self.jitter_s, self.slots) * fps
-        # The current frame and every future frame are excluded even at low FPS.
+        # History must precede the current row.
         rows = np.rint(centers).astype(np.int64)
         valid = (rows >= 0) & (rows < current_row)
         rows = np.maximum(0, np.minimum(rows, max(0, current_row - 1)))
@@ -62,12 +60,10 @@ class PastFrameSelector:
 
 
 class CausalObservationBuffer:
-    """Store head-camera RGB frames within one explicitly identified episode.
+    """Episode-local head-camera frames with monotonic timestamps in seconds.
 
-    ``append`` automatically clears storage when the episode identifier changes.
-    Timestamps are seconds on a monotonic episode clock. ``history`` chooses
-    observations nearest each past slot and returns zero-filled invalid slots.
-    Calling ``reset`` is required when reusing an episode identifier.
+    New episode IDs clear history; call reset() when reusing an ID.
+    history() returns nearest past frames and zeros for invalid slots.
     """
 
     def __init__(self, slots: int = 20, interval_s: float = 1.0, *, tolerance_s: float = 0.05):

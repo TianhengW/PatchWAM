@@ -1,9 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Small independent transformer for executable CPU examples and contract tests.
-
-This model is randomly initialized and does not reproduce FLUX.2 capacity or
-published scores. Production initialization uses the separate official adapter.
-"""
+"""Randomly initialized transformer for CPU checks, not benchmark scores."""
 
 import math
 

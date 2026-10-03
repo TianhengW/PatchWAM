@@ -67,7 +67,7 @@ def test_partial_accumulation_at_epoch_end_is_saved(tmp_path):
         RegressionObjective(), TensorExamples(length=10),
         settings(tmp_path, epochs=1, max_updates=None),
     )
-    # Five microbatches include an incomplete final accumulation group.
+    # Five microbatches leave a partial final group.
     final = run.train()
     assert run.updates == 3
     metadata = json.loads((tmp_path / "step_0000003" / "cursor.json").read_text())

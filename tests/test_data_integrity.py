@@ -21,8 +21,7 @@ def test_fitted_statistics_preserve_episode_stepwise_quantile_envelope(tmp_path)
     torch.testing.assert_close(statistics["global_std"][0].square(), expected_variance)
     assert statistics["global_q01"][0].item() == pytest.approx(0.19)
     assert statistics["global_q99"][0].item() == pytest.approx(19)
-    # Flattening replicated windows gives a different lower quantile and
-    # sample-variance denominator, which must not alter the scaling recipe.
+    # Window replication must not change quantiles or variance.
     assert statistics["global_q01"][0] != torch.quantile(windows.flatten(), 0.01)
 
 

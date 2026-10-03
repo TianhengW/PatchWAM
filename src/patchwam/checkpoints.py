@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Native policy weights and compact checkpoints for frozen-encoder policies."""
+"""Policy weights and compact training checkpoints."""
 
 from pathlib import Path
 
@@ -23,7 +22,7 @@ def _policy_layout(model):
 
 
 def policy_weight_state(model):
-    """Native policy state, plus trainable encoder adapters when present."""
+    """Collect policy state and trainable encoder adapters."""
     policy, extra = _policy_layout(model)
     state = policy.state_dict()
     if extra:
@@ -33,7 +32,7 @@ def policy_weight_state(model):
 
 
 def checkpoint_parameter_keys(model):
-    """Map registered parameter names to complete native checkpoint names."""
+    """Map model parameters to checkpoint keys."""
     policy, extra = _policy_layout(model)
     target = model if hasattr(model, "named_parameters") else policy
     result = {}
@@ -48,7 +47,7 @@ def checkpoint_parameter_keys(model):
 
 
 def load_policy_weights(model, path):
-    """Load a complete native safetensors policy without changing training state."""
+    """Load native weights without changing optimizer state."""
     path = Path(path)
     if path.suffix != ".safetensors":
         raise ValueError("Policy weights must use the native .safetensors format")
@@ -87,7 +86,7 @@ def load_policy_weights(model, path):
 
 
 def register_compact_policy_state(accelerator):
-    """Store the trainable policy once; frozen assets are reconstructed from config."""
+    """Save trainable weights; reload frozen assets from config."""
 
     def compact(model):
         model = accelerator.unwrap_model(model)
@@ -121,7 +120,7 @@ def register_compact_policy_state(accelerator):
 
 
 def save_policy_average(average, model, path):
-    """Export complete native averaged weights, separately from restart state."""
+    """Export EMA weights separately from training state."""
     save_file(
         average.native_weights(model),
         str(path),

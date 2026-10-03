@@ -15,10 +15,9 @@ from torchvision.transforms import functional as vision
 
 
 class AppearanceRandomizer:
-    """Photometric, channel-statistic, and Fourier perturbations shared over time.
+    """Geometry-preserving appearance changes, shared across frames per camera.
 
-    One outer probability draw applies to the sample. Each camera then draws
-    its own appearance parameters. Spatial geometry remains fixed.
+    One sample-level probability draw; independent camera parameters.
     """
 
     def __init__(self, p=0.8, photometric=None, style=None, fourier=None, background=None):

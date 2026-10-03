@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Distributed optimization and restartable state for the patch flow objective."""
+"""Distributed training and checkpoint resume."""
 
 import hashlib
 import json
@@ -77,7 +76,7 @@ class RunSettings:
 
 
 class EpochPermutation(Sampler):
-    """The epoch number determines shuffling, so restarting does not change sample order."""
+    """Deterministic per-epoch shuffling for resume."""
 
     def __init__(self, dataset, seed: int):
         self.length, self.seed, self.epoch = len(dataset), seed, 0
@@ -381,7 +380,7 @@ class OptimizationRun:
 
     def train(self):
         self.model.train()
-        # Keep asset encoders frozen even when the trainable policy enters train mode.
+        # Frozen assets stay in eval mode.
         unwrapped = self.accelerator.unwrap_model(self.model)
         policy = getattr(unwrapped, "policy", unwrapped)
         if hasattr(unwrapped, "freeze_asset_encoders"):
@@ -411,7 +410,7 @@ class OptimizationRun:
                         batch_number // self.settings.accumulation * self.settings.accumulation
                     )
                     group_size = min(self.settings.accumulation, len(self.loader) - group_start)
-                    # Accelerate divides by the configured accumulation even for a short final group.
+                    # Correct Accelerate's scaling for partial groups.
                     self.accelerator.backward(loss * (self.settings.accumulation / group_size))
                     for name, value in result.items():
                         if torch.is_tensor(value) and value.numel() == 1:
@@ -439,7 +438,7 @@ class OptimizationRun:
                     self.scheduler.step()
                     self.updates += 1
                     if self.ema is not None:
-                        # Gradient finiteness was checked before this successful optimizer step.
+                        # Gradients were checked before the optimizer step.
                         self.ema.update(
                             self.accelerator.unwrap_model(self.model), check_finite=False
                         )
@@ -460,6 +459,6 @@ class OptimizationRun:
                         self.checkpoint(next_epoch, next_batch)
                     if finished:
                         return self.last_checkpoint
-        # A skipped fp16 optimizer step can exhaust the epoch budget early.
+        # Skipped fp16 steps can exhaust the epoch budget.
         self.checkpoint(self.settings.epochs, 0, exhausted=True)
         return self.last_checkpoint

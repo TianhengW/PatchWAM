@@ -1,4 +1,4 @@
-# Matched sub20 baseline: ported recipe; real-data GPU and closed-loop parity unverified.
+# Matched sub20 baseline; GPU parity unverified.
 model:
   _target_: patchwam.models.FluxAssetPolicy.from_local_assets
   transformer_path: ${oc.env:PATCHWAM_TRANSFORMER}

@@ -1,9 +1,4 @@
-"""Optional integration tests against the external official FLUX.2 package.
-
-No pretrained checkpoint is needed: micro-size official modules exercise the
-same execution/weight contract. These tests do not establish checkpoint parity,
-CUDA kernel parity, performance, or closed-loop success rate.
-"""
+"""Official FLUX.2 micro-module tests without pretrained weights."""
 
 import copy
 

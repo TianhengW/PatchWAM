@@ -1,4 +1,4 @@
-# Manuscript-grounded VL/history port; supply original fixed update budget and subtask labels; parity unverified.
+# VL/history recipe; requires original update budget and subtask labels.
 model:
   _target_: patchwam.models.FluxAssetPolicy.from_local_assets
   transformer_path: ${oc.env:PATCHWAM_TRANSFORMER}

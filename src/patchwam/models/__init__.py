@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Independent PatchWAM algorithm and optional official FLUX.2 integration."""
+"""PatchWAM models and optional FLUX.2 assets."""
 
 from .codec import RepeatedActionCodec
 from .flow import ShiftedFlow

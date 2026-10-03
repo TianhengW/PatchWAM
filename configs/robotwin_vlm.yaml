@@ -1,4 +1,4 @@
-# Optional current-image VL conditioning; development configuration, no verified benchmark score.
+# Current-image VL; benchmark score unverified.
 model:
   _target_: patchwam.models.FluxAssetPolicy.from_local_assets
   transformer_path: ${oc.env:PATCHWAM_TRANSFORMER}

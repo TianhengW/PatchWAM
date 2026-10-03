@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
 """Continuous rectified-flow training and the descending Euler schedule."""
 
 import math
@@ -8,7 +7,7 @@ from torch import Tensor
 
 
 class ShiftedFlow:
-    """Paper schedule and noise-level weight, in sigma units [0, 1]."""
+    """Shifted flow schedule and weights in sigma units [0,1]."""
 
     def __init__(self, shift: float = 5.0, *, quadrature_points: int = 16384, normalization: str = "continuous"):
         if not math.isfinite(shift) or shift <= 0:
@@ -19,7 +18,7 @@ class ShiftedFlow:
         if normalization not in ("continuous", "endpoint_1000"):
             raise ValueError("normalization must be continuous or endpoint_1000")
         self.normalization = normalization
-        # Midpoint integration computes E_tau[w_raw(phi(tau))], without RNG.
+        # Deterministic weight normalization over the sampling distribution.
         midpoints = (torch.arange(quadrature_points, dtype=torch.float64) + 0.5) / quadrature_points
         points = torch.arange(1, 1001, dtype=torch.float64) / 1000 if normalization == "endpoint_1000" else midpoints
         self.weight_normalizer = self._raw_weight(self.warp(points)).mean().item()
@@ -43,10 +42,9 @@ class ShiftedFlow:
         structured: bool = False, structure_ratio: float = 0.5, edge_ratio: float = 0.5,
         device=None, generator=None, first=None, second=None, mask=None, branches=None,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        """Self-Flow Eq. 4: two draws, token assignment, and a cleaner teacher time.
+        """Self-Flow Eq. 4: mixed token times and a cleaner teacher time.
 
-        Structured scheduling mixes random token masks, the off-diagonal
-        video/action plane, and clean inverse/forward-dynamics edges.
+        Structured branches mix random masks, modality planes, and clean edges.
         """
         if not 0 <= mask_ratio <= 0.5 or batch < 1 or min(future_length, horizon) < 1:
             raise ValueError("Dual timesteps require positive sizes and mask_ratio in [0, 0.5]")
@@ -93,7 +91,7 @@ class ShiftedFlow:
 
 
 def weighted_masked_sample_mse(prediction: Tensor, target: Tensor, weight: Tensor, valid: Tensor | None = None) -> Tensor:
-    """Per-token noise weights, normalized by valid coordinates in each sample."""
+    """Weighted token MSE, averaged over each sample's valid coordinates."""
     if prediction.shape != target.shape or weight.shape != prediction.shape[:2]:
         raise ValueError("Expected matching [B,N,C] predictions and [B,N] weights")
     valid = torch.ones_like(prediction, dtype=torch.bool) if valid is None else torch.broadcast_to(valid.bool(), prediction.shape)
@@ -103,7 +101,7 @@ def weighted_masked_sample_mse(prediction: Tensor, target: Tensor, weight: Tenso
 
 
 def masked_sample_mse(prediction: Tensor, target: Tensor, valid: Tensor | None = None) -> Tensor:
-    """Average independently per sample; an entirely padded sample has loss zero."""
+    """Per-sample MSE; fully padded samples have zero loss."""
     if prediction.shape != target.shape:
         raise ValueError("Prediction and target shapes must match")
     if valid is None:

@@ -160,7 +160,7 @@ def test_withheld_warmup_labels_have_no_input_or_gradient_path():
     kwargs = noise_arguments(data) | {"pseudo_label_mask": torch.ones(2).bool(),
                                      "second_sigma": torch.tensor([0.7, 0.2]),
                                      "structured_branches": torch.zeros(2, dtype=torch.long)}
-    # Supply the random token mask so changing labels cannot change an RNG draw.
+    # Fix the mask to isolate label effects from RNG.
     kwargs["timestep_mask"] = torch.ones(2, 6).bool()
     result = model(data, **kwargs)
     changed = dict(data, action=data["action"] + 100)
@@ -242,8 +242,7 @@ def test_official_flux_token_modulation_and_checkpointed_gradients():
     for left, right in zip(direct.parameters(), recomputed.parameters()):
         torch.testing.assert_close(left.grad, right.grad, atol=1e-6, rtol=1e-5)
 
-    # The feature contract also works through the actual policy and detached
-    # teacher, including inverse and forward conditioning edges.
+    # Check policy and teacher across both conditioning modes.
     model = PatchFlowPolicy(direct, action_dim=14, text_dim=32, proprio_dim=14, self_flow_variant=2)
     attach_teacher(model)
     result = model(data, structured_branches=torch.tensor([2, 3]),

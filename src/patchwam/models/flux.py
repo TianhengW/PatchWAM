@@ -1,15 +1,7 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Masked execution adapter for the official Black Forest Labs FLUX.2 weights.
+"""Prefix-masked adapter for external Black Forest Labs FLUX.2 weights.
 
-FLUX.2 remains an external dependency, not a vendored backbone. This adapter
-uses its learned layers, rotary implementation, and timestep embedding while
-providing PatchWAM's prefix visibility. The official default image-generation
-attention is different and must not be substituted for this masked execution.
-
-Supported upstream layer contract: black-forest-labs/flux2, src/flux2/model.py,
-Klein4BParams / Klein9BParams. CPU micro-model integration was tested against
-commit 50fe5162777813d869182b139e83b10743caef15. Checkpoint load is strict;
-Policy initialization uses the native safetensors parameter names.
+Supports Klein base 4B/9B at revision 50fe5162777813d869182b139e83b10743caef15.
+Native weight loading is strict; standard image-generation attention differs.
 """
 
 import hashlib
@@ -32,8 +24,7 @@ def _asset_file_identity(path: Path) -> dict[str, Any]:
     path = path.resolve()
     stat = path.stat()
     identity = {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
-    # Large weight files are already read during initialization; use their file
-    # metadata rather than performing another full multi-gigabyte read.
+    # Use metadata for large weights to avoid rereading gigabytes.
     if stat.st_size <= 8 * 1024 * 1024 and path.suffix not in {".safetensors", ".bin", ".pt"}:
         identity["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     return identity
@@ -54,7 +45,7 @@ def _asset_identity(transformer_path, autoencoder_path, text_encoder_path, modul
 
 
 class OfficialFluxDenoiser(nn.Module):
-    """Keep upstream weight names intact and replace only execution orchestration."""
+    """Masked execution with unchanged official parameter names."""
 
     def __init__(self, transformer: nn.Module, *, gradient_checkpointing: bool = False):
         super().__init__()
@@ -125,7 +116,7 @@ class OfficialFluxDenoiser(nn.Module):
         core = self.transformer
         images = core.img_in(torch.cat((reference, noisy), 1))
         text = core.txt_in(context)
-        # The official function multiplies sigma by 1000 internally.
+        # The official embedding scales sigma by 1000.
         time = core.time_in(self._embed_time(sigma.to(images), 256))
         image_time = single_time = final_time = time
         if token_sigma is not None:
@@ -144,7 +135,7 @@ class OfficialFluxDenoiser(nn.Module):
         checkpointed = self.gradient_checkpointing and self.training and torch.is_grad_enabled()
         features = None
         for index, block in enumerate(core.double_blocks, 1):
-            # Bind the layer in the callable, so recomputation never uses a later layer.
+            # Bind this layer for checkpoint recomputation.
             def execute(t, i, block=block):
                 return self._paired_block(block, t, i, text_mod, image_mod, position, visibility)
 
@@ -165,12 +156,11 @@ class OfficialFluxDenoiser(nn.Module):
 
 
 class FluxAssetPolicy(nn.Module):
-    """Frozen image assets and optional trainable VL adapters around a policy.
+    """Frozen image encoders and optional trainable VL adapters.
 
-    Raw dataset video is [B,3,2,H,W] in [-1,1], with current/future frames.
-    Inference accepts [B,3,1,H,W] or [B,3,H,W]. Cached text_tokens may replace
-    prompts. The returned action is normalized; a controller must invert the
-    same dataset transform used during training.
+    Train video: [B,3,2,H,W] current/future RGB in [-1,1]; infer: [B,3,1,H,W]
+    or [B,3,H,W]. Cached text may replace prompts. Decode normalized actions
+    with the training data processor before controller execution.
     """
 
     def __init__(self, policy: PatchFlowPolicy, autoencoder: nn.Module, text_encoder: nn.Module,
@@ -274,7 +264,7 @@ class FluxAssetPolicy(nn.Module):
                 result["reference_valid"] = torch.cat((reference_valid.to(current.device), token_valid), 1)
                 result["reference_tokens"] = torch.cat((result["reference_tokens"], history_tokens.to(result["reference_tokens"])), 1)
                 result["reference_ids"] = torch.cat((result["reference_ids"], history_ids), 1)
-        # Sampling predicts current views only; pooled history is prefix context.
+        # Pooled history is context; predict only the current raster.
         if "future_ids" in result:
             result["sampling_future_length"] = result["future_ids"].shape[1]
         text = batch.get("text_tokens")
@@ -355,7 +345,7 @@ class FluxAssetPolicy(nn.Module):
         vl_require_subtasks: bool = False, vl_gradient_checkpointing: bool = True,
         **policy_options,
     ) -> "FluxAssetPolicy":
-        """Load explicit local assets. No model download or remote-code execution."""
+        """Load local assets without downloads or remote code."""
         if variant not in {"klein-base-4b", "klein-base-9b"}:
             raise ValueError("variant must be klein-base-4b or klein-base-9b")
         if dtype not in {"float32", "float16", "bfloat16"}:
@@ -429,7 +419,7 @@ class FluxAssetPolicy(nn.Module):
 
 
 class LocalInstructionEncoder(nn.Module):
-    """Local Qwen3 instruction embeddings with the official FLUX.2 layer readout."""
+    """Local Qwen3 embeddings using official FLUX.2 readout layers."""
 
     def __init__(self, model_path: str, *, context_length: int = 128, dtype=torch.bfloat16):
         super().__init__()
@@ -439,7 +429,7 @@ class LocalInstructionEncoder(nn.Module):
         self.encoder = AutoModelForCausalLM.from_pretrained(
             model_path, torch_dtype=dtype, local_files_only=True, trust_remote_code=False,
         )
-        # Externally supplied upstream package owns the feature-layer convention.
+        # Use the external package's readout layers.
         self.layers = tuple(importlib.import_module("flux2.text_encoder").OUTPUT_LAYERS_QWEN3)
         if not self.layers or min(self.layers) < 0 or max(self.layers) > self.encoder.config.num_hidden_layers:
             raise ValueError("The text encoder does not provide the required hidden-state layers")

@@ -1,9 +1,6 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Local causal Qwen3-VL conditioning with pooled history and optional LoRA.
+"""Local Qwen3-VL with pooled history and optional LoRA.
 
-Only current and past head-camera observations enter this encoder. The world
-model's future target is never accepted by this interface. Official pretrained
-vision/language modules remain an external Transformers dependency.
+Accepts current/past head-camera images only; future targets are excluded.
 """
 
 import math
@@ -16,7 +13,7 @@ from torch.nn import functional as F
 
 
 class LowRankResidualLinear(nn.Module):
-    """A frozen linear map plus an independently initialized low-rank branch."""
+    """Frozen linear map with a trainable low-rank residual."""
 
     def __init__(self, base: nn.Linear, rank: int = 64, alpha: float = 128, dropout: float = 0.05):
         super().__init__()
@@ -35,7 +32,7 @@ class LowRankResidualLinear(nn.Module):
 
 
 def pool_visual_grid(tokens: torch.Tensor, height: int, width: int, size: int = 4):
-    """Average-pool a raster token grid without learning a projection."""
+    """Average-pool raster tokens without learned weights."""
     if size < 1 or tokens.ndim != 2 or tokens.shape[0] != height * width:
         raise ValueError("Visual tokens must match the declared raster grid")
     raster = tokens.T.reshape(1, tokens.shape[-1], height, width)
@@ -43,12 +40,11 @@ def pool_visual_grid(tokens: torch.Tensor, height: int, width: int, size: int = 
 
 
 class VisualInstructionEncoder(nn.Module):
-    """Read instruction states and a last-prompt summary from a local VL model.
+    """Encode instructions and the last-prompt summary.
 
-    ``current`` is unaugmented RGB [B,3,H,W] in [-1,1]. ``history`` is
-    [B,K,3,H,W], nearest slot first; invalid slots are entirely omitted from the
-    language input. The frozen vision path produces full current-image tokens
-    and pooled past-image tokens, including the model's DeepStack features.
+    Frozen vision uses unaugmented RGB [-1,1]: current [B,3,H,W] and
+    nearest-first history [B,K,3,H,W].
+    Invalid history is omitted; past grids and DeepStack features are pooled.
     """
 
     requires_images = True
@@ -247,7 +243,7 @@ class VisualInstructionEncoder(nn.Module):
             raise ValueError("This VL training contract requires subtask sentence labels")
         features, auxiliary = [], []
         for index, instruction in enumerate(prompts):
-            # Oldest-to-newest images precede instruction tokens in the causal LM.
+            # Causal order: past images, current image, instruction.
             slots = torch.nonzero(history_valid[index].bool(), as_tuple=False).flatten().tolist()[::-1]
             images = [self._image(history[index, slot]) for slot in slots] + [self._image(current[index])]
             feature, loss = self._prepare_sample(instruction, images, [True] * len(slots) + [False],

@@ -1,5 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Explicit command-line entry points for training and local smoke verification."""
+"""Training and smoke-test commands."""
 
 import argparse
 import hashlib

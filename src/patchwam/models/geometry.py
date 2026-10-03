@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
 """Token layouts and visibility for the joint world/action prediction."""
 
 import torch
@@ -28,10 +27,9 @@ def joint_visibility(
     *, text_valid: Tensor | None = None, reference_valid: Tensor | None = None,
     isolate_actions: bool = False, device=None,
 ) -> Tensor:
-    """Return SDPA visibility: True means query may attend to key.
+    """SDPA mask: True permits attention; invalid keys are hidden.
 
-    Layout: [text (+ state), reference | future, action]. A clean prefix is
-    closed under attention. Both generated groups see the complete prefix.
+    Layout: [text + state, reference | future, action]. Prefix sees only prefix.
     """
     lengths = (text_length, reference_length, future_length, horizon)
     if min(lengths) < 0 or text_length + reference_length == 0:
@@ -62,7 +60,7 @@ def joint_visibility(
 
 
 def flatten_image_latents(latents: Tensor) -> Tensor:
-    """Official FLUX.2 AE output is already spatially packed to 128 channels."""
+    """Flatten packed FLUX.2 latents [B,128,H,W] to [B,H*W,128]."""
     if latents.ndim != 4:
         raise ValueError("Expected [batch, channels, height, width]")
     return latents.flatten(2).transpose(1, 2)

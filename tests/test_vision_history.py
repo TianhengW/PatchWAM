@@ -109,7 +109,7 @@ def test_asset_wrapper_separate_views_history_and_vl_gradients():
     prediction = wrapper.sample_actions(batch, steps=1)
     assert prediction["future_tokens"].shape == (1, 48, 128)
     assert encoder.seen[1] is None
-    # Changing future camera targets cannot affect causal language inputs.
+    # Future targets must not affect language inputs.
     changed = {**batch, "camera_video": batch["camera_video"].clone()}
     changed["camera_video"][:, :, :, -1] += 100
     wrapper._encode(changed, target=True)
@@ -133,7 +133,7 @@ class _TinyProcessor:
         return " ".join(pieces) + " <assistant>"
 
     def image_processor(self, images, **kwargs):
-        # Two temporal copies of every 2x2 RGB patch from an 8x8 image.
+        # Duplicate each 2x2 patch over time.
         patches = []
         for image in images:
             rgb = torch.from_numpy(np.asarray(image).copy()).float().permute(2, 0, 1) / 255
@@ -257,7 +257,7 @@ def test_real_mini_vl_history_self_flow_ema_exact_resume(tmp_path):
 
         def check_prefix(_module, args):
             batch = args[0]
-            # Three 8x8 current rasters plus one pooled 2x2 historical raster.
+            # Three 8x8 views plus 2x2 history.
             assert batch["reference_tokens"].shape[1:] == (196, 128)
             assert batch["future_tokens"].shape[1:] == (192, 128)
             calls["policy"] += 1
@@ -276,7 +276,7 @@ def test_real_mini_vl_history_self_flow_ema_exact_resume(tmp_path):
     baseline.train()
     assert calls["vl"] == 2 and calls["policy"] > calls["vl"]
     assert baseline.ema.updates == baseline.model.policy._optimizer_updates == 2
-    # The first update withholds labels; the second crosses pseudo-label warmup.
+    # Update 2 crosses pseudo-label warmup.
     assert any(parameter.count_nonzero() for name, parameter in baseline.model.named_parameters()
                if "text_encoder" in name and "residual_out.weight" in name)
 

@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
 """Parameter-free action coordinates in the visual token space."""
 
 import math
@@ -10,10 +9,9 @@ from torch import Tensor
 
 @dataclass(frozen=True)
 class RepeatedActionCodec:
-    """Encode normalized controls by repetition; read them by group averaging.
+    """Repeat normalized actions into tokens; decode by group averaging.
 
-    Normalization and inverse normalization belong to the dataset/controller
-    boundary. No learned action projection or image autoencoder is involved.
+    The data processor handles normalization; the codec has no learned weights.
     """
 
     action_dim: int
@@ -49,7 +47,7 @@ class RepeatedActionCodec:
         return groups.mean(-1) / self.scale
 
     def coordinate_validity(self, valid_dimensions: Tensor) -> Tensor:
-        """Expand dimension validity, keeping codec fill coordinates supervised."""
+        """Expand valid dimensions; keep fill coordinates supervised."""
         if valid_dimensions.shape[-1] != self.action_dim:
             raise ValueError("Dimension mask does not match action_dim")
         result = torch.ones(

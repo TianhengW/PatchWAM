@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
 """Joint latent flow objective and action-chunk sampling."""
 
 import math
@@ -17,16 +16,12 @@ from .tiny import SmallJointTransformer
 
 
 class PatchFlowPolicy(nn.Module):
-    """A backbone-independent implementation of the published core method.
+    """Joint flow on encoded observations and normalized actions.
 
-    ``forward`` consumes normalized actions and encoded visual/text tokens:
-    reference_tokens [B,R,128], future_tokens [B,S,128], text_tokens [B,L,C],
-    action [B,H,A], and optional proprio [B,P] or [B,H,P]. Explicit four-axis
-    reference_ids / future_ids preserve raster and multiview geometry; the
-    sequence-coordinate fallback exists for synthetic examples only.
-
-    Padding flags use the dataset convention: True means invalid. A dimension
-    flag may be [A], [B,A], or [B,H,A]; a step flag must be [B,H].
+    Inputs: reference_tokens [B,R,128], future_tokens [B,S,128], text_tokens
+    [B,L,C], action [B,H,A], optional proprio [B,P] or [B,H,P]. Use raster IDs
+    for real images.
+    Padding True means invalid: dimensions [A], [B,A], or [B,H,A]; steps [B,H].
     """
 
     def __init__(
@@ -86,17 +81,16 @@ class PatchFlowPolicy(nn.Module):
         object.__setattr__(self, "_self_flow_teacher", None)
 
     def set_optimizer_updates(self, count: int):
-        """The engine cursor controls pseudo-label warmup, including continuation."""
+        """Set successful updates for pseudo-label warmup and resume."""
         if type(count) is not int or count < 0:
             raise ValueError("Successful optimizer update count must be a nonnegative integer")
         self._optimizer_updates = count
 
     def attach_self_flow_teacher(self, teacher: Callable):
-        """Attach a detached EMA evaluator owned and checkpointed by the engine."""
+        """Attach the engine's detached, checkpointed EMA evaluator."""
         if not callable(teacher):
             raise TypeError("Self-Flow teacher must be a callable EMA evaluator")
-        # Registering a teacher as a child module would include it in the optimizer
-        # and recursively duplicate policy state. The engine owns its lifecycle.
+        # Keep the engine-owned teacher outside the policy's module tree.
         object.__setattr__(self, "_self_flow_teacher", teacher)
 
     def _condition_mask(self, batch, mask, generator):
@@ -122,7 +116,7 @@ class PatchFlowPolicy(nn.Module):
             valid = valid & ~drop_mask.to(context.device)[:, None]
         if valid is not None:
             valid = valid.to(device=context.device, dtype=torch.bool)
-            # A masked key containing NaN still contaminates SDPA's dot product.
+            # Masked NaN keys still contaminate SDPA.
             context = torch.where(valid[..., None], context, 0)
         if self.state_projection is not None:
             state = batch.get("proprio")
@@ -178,7 +172,7 @@ class PatchFlowPolicy(nn.Module):
                 raise ValueError("reference_valid must match reference_tokens [B,R]")
             reference_valid = reference_valid.to(device=device, dtype=torch.bool)
             reference = torch.where(reference_valid[..., None], reference, 0)
-        # Raster IDs must be supplied when working with encoded real images.
+        # Real images supply raster IDs; synthetic examples use sequence IDs.
         ref_ids = batch.get("reference_ids")
         if ref_ids is None:
             ref_ids = sequence_coordinates(b, reference.shape[1], group=10, device=device)
@@ -222,7 +216,7 @@ class PatchFlowPolicy(nn.Module):
         teacher_sampling: bool = False, sampling_steps: int | None = None,
         horizon: int = 16, future_length: int | None = None,
     ) -> dict[str, Tensor]:
-        # Stateless EMA calls enter these branches without invoking another teacher.
+        # EMA calls bypass recursive teacher evaluation.
         if teacher_sampling:
             return self.sample_actions_from_future(
                 batch, horizon=horizon, steps=self.self_flow_sampling_steps if sampling_steps is None else sampling_steps,
@@ -268,8 +262,7 @@ class PatchFlowPolicy(nn.Module):
                 actions = actions.clone()
                 actions[pseudo_mask] = generated.to(actions)
             elif not labeling_active:
-                # Withheld ground truth is excluded from student and teacher
-                # inputs even before a pseudo-label is available.
+                # Warmup hides labels from both student and teacher inputs.
                 actions = torch.where(pseudo_mask[:, None, None], 0, actions)
         clean_actions = torch.where(valid_dimensions, actions, 0)
         action_tokens = self.codec.encode(clean_actions).to(future)
@@ -366,7 +359,7 @@ class PatchFlowPolicy(nn.Module):
         steps: int = 20, generator=None, initial_future: Tensor | None = None, initial_action: Tensor | None = None,
         guidance_scale: float = 1, action_guidance_scale: float | None = None,
     ) -> dict[str, Tensor]:
-        """Generate a joint latent; return normalized controls for the data boundary."""
+        """Generate normalized actions and future latent tokens."""
         reference = batch["reference_tokens"]
         action_guidance_scale = guidance_scale if action_guidance_scale is None else action_guidance_scale
         if not all(math.isfinite(value) and value >= 0 for value in (guidance_scale, action_guidance_scale)):
@@ -404,7 +397,7 @@ class PatchFlowPolicy(nn.Module):
         self, batch: Mapping[str, Any], *, horizon: int = 16, steps: int = 20,
         generator=None, initial_action: Tensor | None = None,
     ) -> dict[str, Tensor]:
-        """Inverse dynamics: keep clean future tokens fixed and generate actions."""
+        """Inverse dynamics: clamp future tokens and generate actions."""
         if self.self_flow_variant < 2:
             raise ValueError("Conditional dynamics sampling requires a structured Self-Flow policy")
         future = batch["future_tokens"]
@@ -428,7 +421,7 @@ class PatchFlowPolicy(nn.Module):
         self, batch: Mapping[str, Any], *, future_length: int | None = None,
         steps: int = 20, generator=None, initial_future: Tensor | None = None,
     ) -> dict[str, Tensor]:
-        """Forward dynamics: keep clean normalized controls fixed and generate a future."""
+        """Forward dynamics: clamp normalized actions and generate future tokens."""
         if self.self_flow_variant < 2:
             raise ValueError("Conditional dynamics sampling requires a structured Self-Flow policy")
         actions = batch["action"]
