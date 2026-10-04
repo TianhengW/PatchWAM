@@ -31,6 +31,7 @@ See the [implementation and verification record](docs/migration.md) for current 
 - [Action sampling](#action-sampling)
 - [Verification and troubleshooting](#verification-and-troubleshooting)
 - [Repository layout](#repository-layout)
+- [Citation](#citation)
 - [Acknowledgements](#acknowledgements)
 - [License](#license)
 
@@ -747,6 +748,23 @@ src/patchwam/
     ├── appearance.py        C2R appearance randomization
     └── PROVENANCE.json      Data-processing attribution and modification records
 tests/                       Unit and CPU integration checks
+```
+
+## Citation
+
+If you use PatchWAM in your research, please cite our paper:
+[An Action Is Worth One Patch: Unified World-Action Modeling with PatchWAM](https://arxiv.org/abs/2609.25961).
+
+```bibtex
+@misc{wang2026patchwam,
+  title={An Action Is Worth One Patch: Unified World-Action Modeling with {PatchWAM}},
+  author={Tianheng Wang and Zhou Xie and Heng Jia and Jianhua Xu and Tong Zhang and Kaicheng Yu},
+  year={2026},
+  eprint={2609.25961},
+  archivePrefix={arXiv},
+  primaryClass={cs.RO},
+  url={https://arxiv.org/abs/2609.25961}
+}
 ```
 
 ## Acknowledgements
