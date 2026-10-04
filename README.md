@@ -2,6 +2,8 @@
 
 Code for **An Action Is Worth One Patch: Unified World–Action Modeling with PatchWAM**.
 
+Maintained by [TianhengW](https://github.com/TianhengW).
+
 PatchWAM places visual predictions and robot actions in a shared patch-token space.
 Each action vector becomes one fixed, parameter-free token. A single denoising
 transformer jointly predicts future visual tokens and an action chunk, conditioned
