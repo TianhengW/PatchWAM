@@ -2,19 +2,29 @@
 
 These features have separate configurations. Enabling every feature at once changes
 the experiment. The ordinary RobotWin/LIBERO recipes retain the shared-noise core;
-the paper evaluates without classifier-free guidance. Real-data GPU and closed-loop
-parity of these independent ports still requires verification.
+the paper evaluates with 10 solver steps and without classifier-free guidance.
+Use the configuration belonging to the experiment being reproduced. Real-data GPU
+and closed-loop parity of these independent ports still requires verification.
+See [action sampling and inference](inference.md) for prepared batches, decoding,
+online history reset, and live/EMA weight selection.
 
 ## Configuration map
 
 | Configuration | Purpose | Global batch |
 | --- | --- | --- |
-| `configs/robotwin_matched.yaml` | Shared-noise control, one of every 20 window starts, 10 epochs | 64: 8 processes × 4 × 2 |
-| `configs/robotwin_self_flow_v1.yaml` | Dual timesteps and EMA representation teacher | 64: 8 × 4 × 2 |
-| `configs/robotwin_self_flow_v2.yaml` | Variant 1 plus modality-structured timestep masks | 64: 8 × 4 × 2 |
-| `configs/robotwin_self_flow_v3.yaml` | Variant 2 plus withheld action labels and teacher pseudo-labels | 64: 8 × 4 × 2 |
-| `configs/robotwin_vlm.yaml` | Optional frozen current-image vision-language conditioning | 256: 32 × 4 × 2 |
-| `configs/robodojo_vlm_history.yaml` | Separate cameras, causal histories, VL LoRA, and subtask supervision | 256: 32 × 8 × 1 |
+| [robotwin_matched.yaml](../configs/robotwin_matched.yaml) | Shared-noise control, one of every 20 window starts, 10 epochs | 64: 8 processes × 4 × 2 |
+| [robotwin_self_flow_v1.yaml](../configs/robotwin_self_flow_v1.yaml) | Dual timesteps and EMA representation teacher | 64: 8 × 4 × 2 |
+| [robotwin_self_flow_v2.yaml](../configs/robotwin_self_flow_v2.yaml) | Variant 1 plus modality-structured timestep masks | 64: 8 × 4 × 2 |
+| [robotwin_self_flow_v3.yaml](../configs/robotwin_self_flow_v3.yaml) | Variant 2 plus withheld action labels and teacher pseudo-labels | 64: 8 × 4 × 2 |
+| [robotwin_vlm.yaml](../configs/robotwin_vlm.yaml) | Frozen Qwen3-VL conditioning on the current head-camera image and instruction | 256: 32 × 4 × 2 |
+| [robodojo_vlm_history.yaml](../configs/robodojo_vlm_history.yaml) | Separate cameras, 20 causal past slots, pooled features, VL LoRA, and subtask supervision | 256: 32 × 8 × 1 |
+
+CFG and EMA can be configured separately from those recipes:
+
+| Feature | Configuration or API | Behavior |
+| --- | --- | --- |
+| CFG | `model.condition_dropout`; sampling `guidance_scale`, `action_guidance_scale` | Drop language during training and combine conditional and language-free sampling velocities. Scale 1 disables guidance. |
+| EMA | `training.ema_decay`, `training.ema_warmup_updates` | Average successful optimizer updates, restore the average with complete training state, and export `ema_policy.safetensors`. |
 
 Use immutable data roots, matching normalization/filter files, and the same source
 and model assets for a comparison. These files specify implementations and intended
@@ -72,7 +82,9 @@ frames with their episode timestamps. Append observations at the recording caden
 use a new episode identifier or call `reset()` at each episode, and retrieve the
 past slots with `history(current_time)`. Resize and prepare separate VL inputs with
 the same training contract. The buffer never retains observations across episodes.
-This helper does not implement a benchmark controller or evaluation runner.
+The buffer is a history helper. For benchmark execution, the
+[online policy and evaluation runner](evaluation.md#shared-online-policy-contract)
+prepare both paths, record every observation, and reset history with each episode.
 
 ## Classifier-free guidance
 

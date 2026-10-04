@@ -1,65 +1,28 @@
-# Closed-loop evaluation and training validation
+# Closed-loop evaluation
 
 `patchwam evaluate` connects a native PatchWAM checkpoint to RoboCasa, RobotWin /
-RoboTwin, or LIBERO. `patchwam validate` checks training and complete-state resume
-with the selected model and dataset. Simulator packages, their assets, model
-weights, and training normalization files are external dependencies.
+RoboTwin, or LIBERO. Simulator packages, their assets, model weights, and training
+normalization files are external dependencies. Run commands below from the
+repository root.
 
-## Training and resume
+## Prerequisites and configurations
 
-The existing `train` entry point trains the full configured FLUX.2 model. For
-example, the RobotWin recipe uses 32 GPUs and global batch 256; preserve that
-contract across machines when reproducing the original run. See
-[`training_recipes.md`](training_recipes.md) and the README's multi-node launch.
+Complete [installation](getting_started.md), [model assets](models.md), and
+[dataset/normalization setup](data.md). Use a native checkpoint produced with
+its matching resolved training configuration. The [training guide](training.md)
+covers [multi-node launch](training.md#multi-node-gpu-launch),
+[full-model training and resume validation](training.md#full-model-training-validation),
+and [complete-state continuation](training.md#resume-complete-training-state).
 
-Before a long run, validate the real model on an allocated GPU:
+| Configuration | Runtime contract |
+| --- | --- |
+| [LIBERO](../configs/evaluation/libero.yaml) | Task suite and provided initial states; explicit gripper/image conventions |
+| [RoboCasa](../configs/evaluation/robocasa.yaml) | Human300 Gym action/state layout; other layouts require explicit mappings |
+| [RobotWin / RoboTwin](../configs/evaluation/robotwin.yaml) | External direct task API with 14D joint commands, task configuration, and instructions |
 
-```bash
-patchwam validate --config configs/robotwin.yaml \
-  --output runs/validate-robotwin --updates 2
-```
-
-This keeps the model, preprocessing, and training objective. It uses batch 1,
-accumulation 1, workers 0, a short update budget, and per-update checkpoints.
-The ordinary recipe is not overwritten. The validator runs an uninterrupted
-baseline and a separate process resumed from update 1, compares all exported
-live/EMA safetensors, and checks finite training metrics and update cursors.
-It enables deterministic algorithms and math SDPA and defaults to exact equality;
-unsupported deterministic operations fail explicitly. Use `--atol` / `--rtol`
-only with recorded reasons.
-The reduced update budget also changes the validation learning-rate schedule.
-
-For a single-node multi-GPU check:
-
-```bash
-patchwam validate --config configs/robotwin.yaml \
-  --output runs/validate-robotwin-ddp --updates 2 --num-processes 8
-```
-
-Run the validator directly inside the allocation; it starts its own workers.
-`validation.json`, `baseline.log`, and `resumed.log` record the result. Full 4B
-parameters and optimizer state still require their ordinary memory; a small
-batch does not make parameter/optimizer storage small.
-
-The local CPU equivalent checks this orchestration without loading real weights:
-
-```bash
-patchwam validate --config configs/smoke.yaml \
-  --output runs/validate-cpu --allow-cpu
-```
-
-Resume a real training run with the original complete checkpoint and recipe:
-
-```bash
-accelerate launch --multi_gpu --num_machines 1 --num_processes 32 --mixed_precision bf16 \
-  -m patchwam.cli train --config configs/robotwin.yaml \
-  --resume /shared/runs/robotwin/step_0005000 \
-  training.output_dir=/shared/runs/robotwin
-```
-
-Use the actual machine/process layout of the original run. World size, data,
-model assets, and training contract must match. `--initialize` loads weights
-for a new run; it does not resume optimizer, scheduler, RNG, or EMA state.
+Each template is a one-episode smoke protocol, with 10 solver steps and guidance
+scale 1. A formal score requires the original complete task list, seeds, splits,
+horizons, instructions, and episode count.
 
 ## Shared online policy contract
 
@@ -86,7 +49,8 @@ its VLM/history configuration.
 
 ## Simulator setup
 
-First complete the README's model-asset and normalization environment setup.
+First complete [model-asset environment setup](models.md) and
+[dataset/normalization setup](data.md).
 The templates reference training recipes whose environment variables must
 resolve even though evaluation does not construct the dataset. Alternatively,
 append `policy.training_config=/path/to/run/configuration.yaml` to each command
@@ -205,6 +169,8 @@ patchwam evaluate --config configs/evaluation/libero.yaml --resume
 Resume skips completed episodes and retries failed attempts under the same
 weights and protocol. Changed checkpoint identity or normalization/configuration
 is rejected. Use a new output directory for a changed experiment.
+The resume signature binds the task/evaluation settings, recorded checkpoint identity,
+normalization hash, model-asset signature, and resolved training configuration.
 
 The runner uses one process. Shard task lists explicitly into distinct output
 directories when using multiple GPUs, and aggregate only matching protocols.

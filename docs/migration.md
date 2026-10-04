@@ -5,7 +5,7 @@ This file distinguishes prepared code from verified reproduction results.
 | Work item | Current state |
 | --- | --- |
 | Source snapshots | Archived outside this repository with commit and file hashes |
-| New `TianhengW/PatchWAM` repository | Created as a private development repository |
+| New `TianhengW/PatchWAM` repository | Created independently; now public |
 | Independent model and optimization code | New implementation; CPU verification passed |
 | Data processing provenance and licensing | Complete per-file manifest, MIT notices, normalization/augmentation oracle checks |
 | H800 / Digua training sources | 10 read-only snapshots, 5952 text files; all SHA256 verified; legacy recipes ported |
@@ -18,7 +18,7 @@ This file distinguishes prepared code from verified reproduction results.
 | Real-data GPU forward and backward | Unverified |
 | Paired fixed-seed closed-loop parity | Unverified |
 | Alternate backbones and expert variants | Pending independent implementation |
-| Public release | Private development version; alternate implementations and GPU reproduction still pending |
+| Public release | Public development version; alternate implementations and GPU reproduction still pending |
 
 Source review records are archived in the local migration workspace. Retained data
 processing keeps its provenance and required license notices.
