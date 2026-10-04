@@ -1,6 +1,6 @@
 # PatchWAM
 
-Code for **An Action Is Worth One Patch: Unified World–Action Modeling with PatchWAM**.
+Code for **[An Action Is Worth One Patch: Unified World–Action Modeling with PatchWAM](https://arxiv.org/abs/2609.25961)**.
 
 Maintained by [TianhengW](https://github.com/TianhengW).
 
